@@ -1,0 +1,140 @@
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class DomRect(BaseModel):
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class ProbeFacts(BaseModel):
+    content_type: str | None = None
+    content_length: int | None = Field(default=None, ge=0)
+    final_url: str | None = None
+    reachable: bool | None = None
+    range_supported: bool | None = None
+
+
+class CapturedResourceCandidate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    candidate_id: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    candidate_type: Literal["file", "magnet", "media", "image", "page", "unknown"]
+    capture_channel: Literal[
+        "dom_link",
+        "selected_text",
+        "media_element",
+        "media_network",
+        "image",
+        "manual",
+    ]
+    page_url: str
+    display_name: str | None = None
+    anchor_text: str | None = None
+    nearby_text: str | None = None
+    section_heading: str | None = None
+    dom_rect: DomRect | None = None
+    selection_overlap: float | None = Field(default=None, ge=0, le=1)
+    normalized_key: str | None = None
+    probe_status: Literal["pending", "ok", "failed", "skipped"] = "pending"
+    probe_facts: ProbeFacts | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaptureSelection(BaseModel):
+    type: Literal["automatic", "click", "rectangle", "manual"]
+    candidate_ids: list[str] = Field(default_factory=list)
+    rect: DomRect | None = None
+
+
+class DeviceContext(BaseModel):
+    os: Literal["windows", "macos", "linux", "android", "ios", "unknown"] = "unknown"
+    arch: Literal["x64", "arm64", "x86", "unknown"] = "unknown"
+    locale: str = "zh-CN"
+
+
+class CapturePage(BaseModel):
+    url: str
+    title: str
+    relevant_text: list[str] = Field(default_factory=list)
+
+
+class CaptureBatch(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: Literal["0.1"] = "0.1"
+    batch_id: str = Field(min_length=1)
+    tab_id: int | None = None
+    trigger: Literal["automatic", "click", "rectangle", "manual"]
+    page: CapturePage
+    selection: CaptureSelection | None = None
+    device: DeviceContext | None = None
+    candidates: list[CapturedResourceCandidate] = Field(min_length=1, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanItem(BaseModel):
+    item_id: str
+    candidate_ids: list[str]
+    label: str
+    plain_explanation: str
+    reason: str
+    role: Literal["primary", "attachment", "alternative", "excluded", "unknown"]
+    technical_attributes: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class ScenarioRecommendation(BaseModel):
+    scenario: Literal["current_device", "compatibility", "quality", "small_size", "manual"]
+    item_ids: list[str]
+    summary: str
+
+
+class ResourcePlan(BaseModel):
+    schema_version: Literal["0.1"] = "0.1"
+    plan_id: str
+    batch_id: str
+    provider: str
+    resource_type: Literal[
+        "software", "video", "audio", "image", "archive", "mixed", "unknown"
+    ]
+    resource_title: str
+    overview: str
+    selected: list[PlanItem] = Field(default_factory=list)
+    alternatives: list[PlanItem] = Field(default_factory=list)
+    excluded: list[PlanItem] = Field(default_factory=list)
+    uncertainties: list[PlanItem] = Field(default_factory=list)
+    recommendations: list[ScenarioRecommendation] = Field(default_factory=list)
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    provider: str
+    version: str = "0.1.0"
+
+
+class ResourceJobSnapshot(BaseModel):
+    job_id: str
+    title: str
+    subtitle: str
+    kind: Literal["zhiqu", "normal"]
+    status: Literal[
+        "planning", "downloading", "waiting_for_source", "verifying", "completed", "paused"
+    ]
+    progress: float = Field(ge=0, le=100)
+    downloaded_bytes: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+    speed_bytes_per_second: int = Field(ge=0)
+    eta_seconds: int | None = Field(default=None, ge=0)
+    stage_label: str
+    issue: str | None = None
+    next_action: Literal["pause", "resume", "continue_acquisition", "open"] | None = None
+    source_count: int = Field(ge=0)
+    excluded_count: int = Field(ge=0)
+    created_at: datetime
+    destination: str | None = None

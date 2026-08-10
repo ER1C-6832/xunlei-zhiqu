@@ -1,0 +1,13 @@
+{
+  "name": "xunlei-zhiqu",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "dev:extension": "pnpm --filter @xunlei-zhiqu/extension dev",
+    "dev:task-center": "pnpm --filter @xunlei-zhiqu/task-center dev",
+    "dev:web": "pnpm --parallel --filter @xunlei-zhiqu/extension --filter @xunlei-zhiqu/task-center dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

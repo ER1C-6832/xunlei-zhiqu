@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "迅雷智取 Lens",
+  "version": "0.1.0",
+  "description": "汇聚页面候选资源，并交给本地迅雷智取 Runtime 进行理解与选型。",
+  "permissions": ["sidePanel", "storage", "tabs", "activeTab"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "打开迅雷智取"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

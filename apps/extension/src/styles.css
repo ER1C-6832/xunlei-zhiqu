@@ -1,0 +1,85 @@
+:root {
+  font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: #14213d;
+  background: #f4f7fb;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #f4f7fb; }
+button { font: inherit; }
+button:focus-visible { outline: 3px solid rgba(22, 119, 255, 0.28); outline-offset: 2px; }
+
+.panel-shell {
+  min-height: 100vh;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.brand-row { display: flex; align-items: center; gap: 10px; padding: 2px 2px 8px; }
+.brand-row > div:nth-child(2) { display: grid; gap: 2px; flex: 1; }
+.brand-row strong { font-size: 15px; }
+.brand-row span { font-size: 11px; color: #77839a; }
+.brand-mark { width: 36px; height: 36px; display: grid; place-items: center; color: white; background: #1677ff; border-radius: 10px; }
+.prototype-badge { padding: 4px 7px; border-radius: 999px; background: #e8f2ff; color: #1667d9 !important; font-weight: 700; }
+
+.hero-card, .candidate-card, .plan-card {
+  background: white;
+  border: 1px solid #e6ebf2;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(28, 52, 84, 0.06);
+}
+.hero-card { padding: 16px; display: grid; gap: 14px; }
+.hero-card h1, .section-heading h2 { margin: 3px 0 4px; font-size: 17px; line-height: 1.35; }
+.hero-card p { margin: 0; color: #6f7b90; font-size: 12px; line-height: 1.6; }
+.eyebrow { margin: 0 !important; color: #1677ff !important; font-size: 10px !important; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; }
+
+.primary-button, .secondary-button {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 0;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.primary-button { width: 100%; color: white; background: #1677ff; font-weight: 700; box-shadow: 0 8px 18px rgba(22, 119, 255, .2); }
+.primary-button:hover { background: #0f68e8; transform: translateY(-1px); }
+.secondary-button { width: max-content; color: #1667d9; background: #eef5ff; font-weight: 700; }
+.secondary-button:hover { background: #e2efff; }
+button:disabled { opacity: .55; cursor: wait; transform: none; }
+.compact { margin-top: 12px; }
+
+.notice { display: flex; align-items: flex-start; gap: 8px; padding: 11px 12px; border: 1px solid #ffd99f; border-radius: 10px; background: #fff9ef; color: #7a4b00; font-size: 12px; line-height: 1.5; }
+.notice svg { flex: 0 0 auto; margin-top: 1px; }
+
+.candidate-card, .plan-card { padding: 14px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-heading > span { color: #1677ff; background: #edf5ff; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.section-heading > svg { color: #16a36a; }
+.candidate-list { display: grid; gap: 4px; margin-top: 10px; }
+.candidate-row { display: flex; gap: 9px; padding: 9px 8px; border-radius: 8px; background: #f8fafc; }
+.candidate-row > div { min-width: 0; display: grid; gap: 2px; }
+.candidate-row strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-row span { color: #8893a5; font-size: 10px; }
+.file-dot { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #1677ff; flex: 0 0 auto; }
+.empty-copy { color: #8893a5; font-size: 12px; text-align: center; padding: 16px 8px; }
+.overview { margin: 8px 0 12px; color: #68758b; font-size: 12px; line-height: 1.65; }
+.plan-group { border-top: 1px solid #eef1f5; padding-top: 12px; margin-top: 10px; }
+.plan-group h3 { margin: 0 0 8px; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.plan-group h3 span { margin-left: auto; color: #8b95a5; font-weight: 500; }
+.plan-group.selected h3 { color: #13735a; }
+.plan-group.alternative h3 { color: #1667d9; }
+.plan-group.excluded h3 { color: #b13c45; }
+.plan-item { padding: 9px 10px; border-radius: 9px; background: #f8fafc; margin-bottom: 6px; }
+.plan-item strong { display: block; font-size: 12px; }
+.plan-item p { margin: 3px 0; color: #647086; font-size: 11px; line-height: 1.5; }
+.plan-item small { color: #98a1b0; font-size: 10px; line-height: 1.4; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

@@ -1,0 +1,48 @@
+{
+  "schema_version": "0.1",
+  "batch_id": "batch_demo_001",
+  "tab_id": 12,
+  "trigger": "rectangle",
+  "page": {
+    "url": "https://example.test/downloads",
+    "title": "Example App 下载",
+    "relevant_text": ["Windows 版本", "语言包与补丁", "备用地址"]
+  },
+  "selection": {
+    "type": "rectangle",
+    "candidate_ids": ["c1", "c2", "c3", "c4"]
+  },
+  "device": {
+    "os": "windows",
+    "arch": "x64",
+    "locale": "zh-CN"
+  },
+  "candidates": [
+    {
+      "candidate_id": "c1",
+      "value": "https://example.test/files/ExampleApp_5.2.1_win_x64_portable.zip",
+      "candidate_type": "file",
+      "capture_channel": "dom_link",
+      "page_url": "https://example.test/downloads",
+      "display_name": "ExampleApp_5.2.1_win_x64_portable.zip",
+      "anchor_text": "Windows 64 位免安装版",
+      "nearby_text": "解压后直接运行，无需管理员权限",
+      "probe_status": "ok",
+      "probe_facts": {
+        "content_length": 241172103,
+        "content_type": "application/zip",
+        "reachable": true
+      }
+    },
+    {
+      "candidate_id": "c2",
+      "value": "https://example.test/index.html",
+      "candidate_type": "page",
+      "capture_channel": "dom_link",
+      "page_url": "https://example.test/downloads",
+      "display_name": "index.html",
+      "anchor_text": "返回下载首页",
+      "probe_status": "skipped"
+    }
+  ]
+}
