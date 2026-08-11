@@ -4,11 +4,7 @@ from xunlei_zhiqu_runtime.models import ResourceJobSnapshot
 
 
 def fixture_jobs() -> list[ResourceJobSnapshot]:
-    """Small stage-B fixture set for the task center.
-
-    Fixtures cover the visible task states only. Dynamic jobs created from the
-    extension are kept by job_store and are placed ahead of these examples.
-    """
+    """Small stage-B fixture set for the task center."""
     now = datetime.now(UTC)
     return [
         ResourceJobSnapshot(
@@ -29,6 +25,11 @@ def fixture_jobs() -> list[ResourceJobSnapshot]:
             created_at=now - timedelta(minutes=18),
             destination="D:/Downloads/Example App 5.2.1",
             delivery_target="local",
+            resource_type="software",
+            plan_overview="节点 A 识别为 Windows 软件包，优先选择当前设备可直接使用的 x64 便携版，并保留中文语言包与校验文件。",
+            selected_items=["Windows x64 便携版", "中文语言包", "SHA-256 校验文件"],
+            alternative_count=2,
+            source_page="https://example.test/downloads",
         ),
         ResourceJobSnapshot(
             job_id="job_zhiqu_002",
@@ -49,6 +50,11 @@ def fixture_jobs() -> list[ResourceJobSnapshot]:
             created_at=now - timedelta(hours=1, minutes=12),
             destination="迅雷云盘/智取下载/Open Media Course",
             delivery_target="cloud",
+            resource_type="video",
+            plan_overview="节点 A 选择 1080p 主视频、中文字幕与课程附件，备用来源保留但暂不重复下载。",
+            selected_items=["1080p 主视频组", "简体中文字幕", "课程附件"],
+            alternative_count=2,
+            source_page="https://media.example.test/course",
         ),
         ResourceJobSnapshot(
             job_id="job_normal_001",
@@ -68,6 +74,10 @@ def fixture_jobs() -> list[ResourceJobSnapshot]:
             created_at=now - timedelta(days=1),
             destination="D:/Downloads/sample-dataset.zip",
             delivery_target="local",
+            resource_type="archive",
+            plan_overview="普通链接任务。",
+            selected_items=["sample-dataset.zip"],
+            source_page="https://data.example.test/datasets",
         ),
         ResourceJobSnapshot(
             job_id="job_zhiqu_003",
@@ -87,5 +97,10 @@ def fixture_jobs() -> list[ResourceJobSnapshot]:
             created_at=now - timedelta(days=2, hours=3),
             destination="迅雷云盘/智取下载/Open Tools Pack 2026.08",
             delivery_target="cloud",
+            resource_type="software",
+            plan_overview="安装包、使用文档与校验文件已作为一个资源目标完成交付。",
+            selected_items=["Windows x64 安装包", "使用文档", "SHA-256 校验文件"],
+            alternative_count=1,
+            source_page="https://tools.example.test/releases",
         ),
     ]
