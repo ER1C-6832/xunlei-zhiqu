@@ -1,35 +1,67 @@
-# 迅雷智取 v0.2-stage-b1
+# 迅雷智取 · Stage B complete
 
 > 单编排器、双智能节点、确定性执行的闭环资源交付 Agent。
 
-本仓库按 `docs/blueprint/xunlei-zhiqu-v0.4.md` 初始化，阶段 A 已完成，当前进入阶段 B 的第 1 步：高保真任务中心主界面。仍以轻量纵向迭代为主，不重新定义产品，也不扩张为通用聊天助手、通用爬虫或纯链接下载器。
+本仓库以 `docs/blueprint/xunlei-zhiqu-v0.4.md` 为当前产品和架构事实来源。阶段 A 与阶段 B 已完成；下一阶段进入 C：智能多选与候选融合。项目不会扩张为通用聊天助手、通用爬虫或纯链接下载器。
 
-## 本次已实现
+## 当前已实现
 
-- `apps/extension`：Chrome/Edge Manifest V3 扩展骨架，包含 Side Panel、DOM 链接与文本 Magnet 初步采集、`CaptureBatch` 生成、调用本地 Runtime 和展示 `ResourcePlan`。
-- `apps/task-center`：阶段 B1 高保真迅雷 17 风格任务中心，包含紧凑侧栏/顶栏、下载中/已完成、扁平任务列表、智取标记、异常状态、可关闭任务详情抽屉和基础界面态交互。
-- `services/runtime`：FastAPI 本地 Runtime，包含 CORS、健康检查、`POST /v1/capture/analyze`、阶段 B 示例任务快照接口和构建后 `/app` 静态托管；未构建前访问 `/app` 会给出明确构建提示而不是裸 404。
-- `ModelProviderAdapter`：统一模型调用边界。
-- `FixtureProvider`：默认离线演示，执行轻量确定性去噪和场景化选择。
-- `OpenAICompatibleProvider`：只在 Runtime 中读取 API Key，通过 OpenAI 兼容 `/chat/completions` 接口调用模型并校验结构化输出。
-- `packages/contracts`：临时 TypeScript 契约；Runtime 中有对应 Pydantic v2 模型。
-- 少量关键测试：Fixture 选型和分析 API。
+### 浏览器扩展 `apps/extension`
 
+- Chrome/Edge Manifest V3 Side Panel；
+- DOM 链接与文本 Magnet 初步采集；
+- `CaptureBatch` → Runtime → 节点 A → `ResourcePlan`；
+- 本地 / 云盘交付目的地选择；
+- 确认计划后创建 `ResourceJob`；
+- ResourcePlan 可直接“收藏到链接库”，不必先创建任务；
+- API Key 不进入扩展。
 
-## 阶段 B 迭代拆分
+### 任务中心 `apps/task-center`
 
-- **B1（本版本）**：高保真下载主界面、下载中/已完成、任务行、选中态与详情抽屉。
-- **B2**：Runtime 中可创建/更新的轻量 `ResourceJobSnapshot` 数据流与进度刷新。
-- **B3**：只补下载链路需要的云盘目的地差异与链接库历史。
-- **B4**：收口“目标、选择、问题、下一步”和少量关键回归，然后进入阶段 C。
+阶段 B 已按迅雷 17 下载模块方向完成高保真收口：
+
+- 飞鸟品牌标识；
+- 左侧只保留下载、云盘、链接库和设置；
+- 下载中 / 已完成；
+- 本地任务与云盘任务差异；
+- 智取任务、普通任务、异常任务；
+- Runtime 快照自动刷新；
+- 暂停 / 恢复写回 Runtime；
+- 可用的任务筛选、排序和批量暂停 / 恢复；
+- 右上角 Runtime 状态、通知、用户菜单；
+- 设置界面：刷新频率、列表密度、默认交付位置、通知和关于；
+- 新建普通下载任务（仅作为迅雷已有下载能力的任务中心入口）；
+- 任务详情明确呈现“目标、选择、问题、下一步”；
+- 链接库“收藏 / 历史”、分类筛选、列表 / 网格视图；
+- 历史记录可关联回 ResourceJob；
+- 收藏可在任务中心切换，也可直接从智取扩展创建。
+
+### Runtime `services/runtime`
+
+- `GET /v1/health`
+- `POST /v1/capture/analyze`
+- `POST /v1/jobs`
+- `POST /v1/jobs/manual`
+- `GET /v1/jobs`
+- `GET /v1/jobs/{job_id}`
+- `POST /v1/jobs/{job_id}/pause`
+- `POST /v1/jobs/{job_id}/resume`
+- `GET /v1/link-library`
+- `GET /v1/link-history`（兼容入口）
+- `POST /v1/link-library/favorites`
+- `POST /v1/link-library/{history_id}/favorite`
+- 构建后的任务中心托管在 `/app/`。
+
+当前 Job Store 仍为进程内轻量状态；这是阶段 B 的刻意边界。SQLite 持久化、真实 Download Engine、节点 B 与恢复系统不在本阶段提前实现。
 
 ## 尚未实现
 
-- 完整 ResourceGraph、完整状态机和事件持久化；
-- 节点 B、一键续取真实浏览器交接和下载恢复；
-- 网络媒体捕获、图片捕获、Torrent 文件树和全部下载协议；
-- 视觉模型；
-- 大量 pytest、覆盖率门槛或微服务拆分。
+- 阶段 C：DOM / 纯文本 / Magnet / 框选候选融合、去重、智能多选；
+- 完整 ResourceGraph 与持久状态机；
+- 真实 Download Engine、分块与协议执行；
+- 节点 B 与一键续取闭环；
+- 最终哈希 / 文件结构 / 完整性交付验证；
+- 第一版视觉模型。
 
 ## 环境要求
 
@@ -39,9 +71,7 @@
 - uv
 - Chrome 或 Edge
 
-## 安装
-
-在仓库根目录执行：
+## 首次安装
 
 ```powershell
 corepack pnpm install
@@ -53,60 +83,65 @@ Copy-Item .env.example .env
 
 ## 开发启动
 
-### 1. Runtime
+Runtime：
 
 ```powershell
 uv run --project services/runtime uvicorn xunlei_zhiqu_runtime.main:app --app-dir services/runtime/src --reload --host 127.0.0.1 --port 8765
 ```
 
-API 文档：`http://127.0.0.1:8765/docs`
-
-### 2. 任务中心
-
-另开终端：
+任务中心：
 
 ```powershell
 corepack pnpm --filter @xunlei-zhiqu/task-center dev
 ```
 
-打开：`http://127.0.0.1:5173`
-
-### 3. 浏览器扩展
-
-另开终端：
+浏览器扩展持续构建：
 
 ```powershell
 corepack pnpm --filter @xunlei-zhiqu/extension dev
 ```
 
-然后在 Chrome/Edge 的扩展管理页开启开发者模式，选择“加载已解压的扩展”，目录为：
+Chrome / Edge 加载目录：
 
 ```text
 apps/extension/dist
 ```
 
-打开任意包含下载链接的公开页面，点击扩展图标，先“采集当前页”，再“交给节点 A 分析”。
-
-也可以在 Windows PowerShell 中执行：
+也可以使用：
 
 ```powershell
 .\scripts\dev.ps1
 ```
 
-## 构建与验证
+## 本地更新后的重构 / 构建
+
+阶段 B 不新增 npm 或 Python 第三方依赖。拉取代码后执行：
 
 ```powershell
-corepack pnpm build
+git pull --rebase origin main
 corepack pnpm typecheck
-uv run --project services/runtime pytest
-uv run --project services/runtime ruff check services/runtime
+corepack pnpm --filter @xunlei-zhiqu/task-center build
+corepack pnpm --filter @xunlei-zhiqu/extension build
+uv run --project services/runtime python -m compileall services/runtime/src
 ```
 
-构建任务中心后，Runtime 会自动托管：`http://127.0.0.1:8765/app/`。任务中心生产构建的 Vite base 已固定为 `/app/`；如果先启动 Runtime、后构建前端，需要重启 Runtime 让静态挂载生效。
+然后重启 Runtime，并在浏览器扩展管理页点击“重新加载”。
 
-## 切换 OpenAI 兼容模型
+任务中心生产地址：
 
-复制 `.env.example` 为 `.env`，仅修改 Runtime 环境：
+```text
+http://127.0.0.1:8765/app/
+```
+
+API 文档：
+
+```text
+http://127.0.0.1:8765/docs
+```
+
+## OpenAI 兼容模型
+
+仅在 Runtime `.env` 中配置：
 
 ```dotenv
 MODEL_PROVIDER=openai_compatible
@@ -117,27 +152,10 @@ MODEL_API_KEY=your-local-runtime-key
 
 API Key 不得写入 `apps/extension`、`apps/task-center`、任何前端环境变量或 GitHub。
 
-## 临时分析接口
-
-```http
-POST /v1/capture/analyze
-Content-Type: application/json
-```
-
-示例输入：`packages/contracts/examples/capture-batch.json`
-
-```powershell
-Invoke-RestMethod `
-  -Method Post `
-  -Uri http://127.0.0.1:8765/v1/capture/analyze `
-  -ContentType 'application/json' `
-  -InFile packages/contracts/examples/capture-batch.json
-```
-
 ## 目录
 
 ```text
-apps/extension          Manifest V3 Lens
+apps/extension          Manifest V3 迅雷智取 Lens
 apps/task-center        迅雷 17 风格 React 任务中心
 services/runtime        FastAPI 本地 Runtime
 packages/contracts      临时跨模块 TypeScript 契约
