@@ -55,7 +55,7 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
         eta_seconds=None,
         stage_label="资源计划已确认，Runtime 正在创建任务",
         next_action="pause",
-        source_count=max(1, len(source_ids)),
+        source_count=len(source_ids),
         excluded_count=len(excluded_ids),
         created_at=datetime.now(UTC),
         destination=payload.destination,
