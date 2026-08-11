@@ -1,5 +1,19 @@
-import type { CaptureBatch, ResourcePlan } from '@xunlei-zhiqu/contracts';
-import { BrainCircuit, Check, Download, FileSearch, LoaderCircle, RefreshCw, X } from 'lucide-react';
+import type {
+  CaptureBatch,
+  ResourceJobCreateRequest,
+  ResourceJobSnapshot,
+  ResourcePlan
+} from '@xunlei-zhiqu/contracts';
+import {
+  BrainCircuit,
+  Check,
+  Download,
+  ExternalLink,
+  FileSearch,
+  LoaderCircle,
+  RefreshCw,
+  X
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
@@ -67,7 +81,8 @@ const demoBatch: CaptureBatch = {
 export function App() {
   const [batch, setBatch] = useState<CaptureBatch | null>(null);
   const [plan, setPlan] = useState<ResourcePlan | null>(null);
-  const [status, setStatus] = useState<'idle' | 'capturing' | 'analyzing' | 'error'>('idle');
+  const [createdJob, setCreatedJob] = useState<ResourceJobSnapshot | null>(null);
+  const [status, setStatus] = useState<'idle' | 'capturing' | 'analyzing' | 'creating' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
 
   const candidateSummary = useMemo(() => {
@@ -85,6 +100,7 @@ export function App() {
     setStatus('capturing');
     setError(null);
     setPlan(null);
+    setCreatedJob(null);
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) throw new Error('未找到当前标签页');
@@ -111,15 +127,14 @@ export function App() {
     setBatch(payload);
     setStatus('analyzing');
     setError(null);
+    setCreatedJob(null);
     try {
       const response = await fetch(`${RUNTIME_URL}/v1/capture/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (!response.ok) {
-        throw new Error(`Runtime 返回 ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`Runtime 返回 ${response.status}`);
       setPlan((await response.json()) as ResourcePlan);
       setStatus('idle');
     } catch (analyzeError) {
@@ -128,6 +143,35 @@ export function App() {
         `${analyzeError instanceof Error ? analyzeError.message : '分析失败'}。请确认 Runtime 已在 127.0.0.1:8765 启动。`
       );
     }
+  }
+
+  async function createResourceJob() {
+    if (!plan) return;
+    const payload: ResourceJobCreateRequest = {
+      schema_version: '0.1',
+      plan,
+      capture: batch
+    };
+
+    setStatus('creating');
+    setError(null);
+    try {
+      const response = await fetch(`${RUNTIME_URL}/v1/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error(`创建任务失败：Runtime 返回 ${response.status}`);
+      setCreatedJob((await response.json()) as ResourceJobSnapshot);
+      setStatus('idle');
+    } catch (createError) {
+      setStatus('error');
+      setError(createError instanceof Error ? createError.message : '创建 ResourceJob 失败');
+    }
+  }
+
+  function openTaskCenter() {
+    void chrome.tabs.create({ url: `${RUNTIME_URL}/app/` });
   }
 
   return (
@@ -140,7 +184,7 @@ export function App() {
           <strong>迅雷智取 Lens</strong>
           <span>候选融合 · 资源理解 · 可修改选型</span>
         </div>
-        <span className="prototype-badge">v0.1</span>
+        <span className="prototype-badge">v0.2</span>
       </header>
 
       <section className="hero-card">
@@ -184,7 +228,7 @@ export function App() {
         </div>
       </section>
 
-      <button className="primary-button" onClick={analyze} disabled={status === 'analyzing'}>
+      <button className="primary-button" onClick={analyze} disabled={status === 'analyzing' || status === 'creating'}>
         {status === 'analyzing' ? <LoaderCircle className="spin" size={18} /> : <BrainCircuit size={18} />}
         {status === 'analyzing' ? '正在理解资源…' : '交给节点 A 分析'}
       </button>
@@ -204,9 +248,30 @@ export function App() {
           <PlanGroup title="备用来源" tone="alternative" items={plan.alternatives} icon={<RefreshCw size={15} />} />
           <PlanGroup title="已排除" tone="excluded" items={plan.excluded} icon={<X size={15} />} />
 
-          <button className="primary-button compact" type="button">
-            交给迅雷智取
+          <button
+            className="primary-button compact"
+            type="button"
+            onClick={createResourceJob}
+            disabled={status === 'creating' || Boolean(createdJob)}
+          >
+            {status === 'creating' ? <LoaderCircle className="spin" size={18} /> : <Download size={17} />}
+            {status === 'creating' ? '正在创建 ResourceJob…' : createdJob ? '任务已创建' : '交给迅雷智取'}
           </button>
+
+          {createdJob && (
+            <>
+              <div className="candidate-row" role="status">
+                <span className="file-dot" />
+                <div>
+                  <strong>已进入任务中心：{createdJob.title}</strong>
+                  <span>{createdJob.stage_label} · {createdJob.job_id}</span>
+                </div>
+              </div>
+              <button className="secondary-button compact" type="button" onClick={openTaskCenter}>
+                <ExternalLink size={16} />打开任务中心
+              </button>
+            </>
+          )}
         </section>
       )}
     </main>
