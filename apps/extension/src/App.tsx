@@ -1,5 +1,6 @@
 import type {
   CaptureBatch,
+  DeliveryTarget,
   ResourceJobCreateRequest,
   ResourceJobSnapshot,
   ResourcePlan
@@ -7,9 +8,11 @@ import type {
 import {
   BrainCircuit,
   Check,
+  Cloud,
   Download,
   ExternalLink,
   FileSearch,
+  HardDrive,
   LoaderCircle,
   RefreshCw,
   X
@@ -82,6 +85,7 @@ export function App() {
   const [batch, setBatch] = useState<CaptureBatch | null>(null);
   const [plan, setPlan] = useState<ResourcePlan | null>(null);
   const [createdJob, setCreatedJob] = useState<ResourceJobSnapshot | null>(null);
+  const [deliveryTarget, setDeliveryTarget] = useState<DeliveryTarget>('local');
   const [status, setStatus] = useState<'idle' | 'capturing' | 'analyzing' | 'creating' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -150,7 +154,8 @@ export function App() {
     const payload: ResourceJobCreateRequest = {
       schema_version: '0.1',
       plan,
-      capture: batch
+      capture: batch,
+      delivery_target: deliveryTarget
     };
 
     setStatus('creating');
@@ -184,7 +189,7 @@ export function App() {
           <strong>迅雷智取 Lens</strong>
           <span>候选融合 · 资源理解 · 可修改选型</span>
         </div>
-        <span className="prototype-badge">v0.2</span>
+        <span className="prototype-badge">v0.3</span>
       </header>
 
       <section className="hero-card">
@@ -248,23 +253,58 @@ export function App() {
           <PlanGroup title="备用来源" tone="alternative" items={plan.alternatives} icon={<RefreshCw size={15} />} />
           <PlanGroup title="已排除" tone="excluded" items={plan.excluded} icon={<X size={15} />} />
 
+          <div className="delivery-block">
+            <div className="delivery-title">
+              <strong>交付到</strong>
+              <span>同一 ResourceJob，只改变交付目的地</span>
+            </div>
+            <div className="delivery-choices" role="group" aria-label="交付位置">
+              <button
+                type="button"
+                className={deliveryTarget === 'local' ? 'delivery-choice active' : 'delivery-choice'}
+                onClick={() => !createdJob && setDeliveryTarget('local')}
+                disabled={Boolean(createdJob)}
+              >
+                <HardDrive size={17} />
+                <span><strong>本地下载</strong><small>D:/Downloads</small></span>
+              </button>
+              <button
+                type="button"
+                className={deliveryTarget === 'cloud' ? 'delivery-choice active' : 'delivery-choice'}
+                onClick={() => !createdJob && setDeliveryTarget('cloud')}
+                disabled={Boolean(createdJob)}
+              >
+                <Cloud size={17} />
+                <span><strong>保存到云盘</strong><small>迅雷云盘 / 智取下载</small></span>
+              </button>
+            </div>
+          </div>
+
           <button
             className="primary-button compact"
             type="button"
             onClick={createResourceJob}
             disabled={status === 'creating' || Boolean(createdJob)}
           >
-            {status === 'creating' ? <LoaderCircle className="spin" size={18} /> : <Download size={17} />}
-            {status === 'creating' ? '正在创建 ResourceJob…' : createdJob ? '任务已创建' : '交给迅雷智取'}
+            {status === 'creating' ? <LoaderCircle className="spin" size={18} /> : deliveryTarget === 'cloud' ? <Cloud size={17} /> : <Download size={17} />}
+            {status === 'creating'
+              ? '正在创建 ResourceJob…'
+              : createdJob
+                ? '任务已创建'
+                : deliveryTarget === 'cloud'
+                  ? '交给迅雷智取并保存到云盘'
+                  : '交给迅雷智取'}
           </button>
 
           {createdJob && (
             <>
-              <div className="candidate-row" role="status">
+              <div className="created-job" role="status">
                 <span className="file-dot" />
                 <div>
                   <strong>已进入任务中心：{createdJob.title}</strong>
-                  <span>{createdJob.stage_label} · {createdJob.job_id}</span>
+                  <span>
+                    {createdJob.delivery_target === 'cloud' ? '云盘任务' : '本地任务'} · {createdJob.stage_label} · {createdJob.job_id}
+                  </span>
                 </div>
               </div>
               <button className="secondary-button compact" type="button" onClick={openTaskCenter}>
