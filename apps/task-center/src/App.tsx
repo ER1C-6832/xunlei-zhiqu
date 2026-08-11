@@ -1,1 +1,1 @@
-export { StageBApp as App } from './StageBApp';
+export { StageBReadableApp as App } from './StageBReadableApp';
