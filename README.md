@@ -1,19 +1,27 @@
-# 迅雷智取 v0.1 可运行骨架
+# 迅雷智取 v0.2-stage-b1
 
 > 单编排器、双智能节点、确定性执行的闭环资源交付 Agent。
 
-本仓库按 `docs/blueprint/xunlei-zhiqu-v0.4.md` 初始化，当前只实现第一轮可运行纵向切片，不重新定义产品，也不扩张为通用聊天助手、通用爬虫或纯链接下载器。
+本仓库按 `docs/blueprint/xunlei-zhiqu-v0.4.md` 初始化，阶段 A 已完成，当前进入阶段 B 的第 1 步：高保真任务中心主界面。仍以轻量纵向迭代为主，不重新定义产品，也不扩张为通用聊天助手、通用爬虫或纯链接下载器。
 
 ## 本次已实现
 
 - `apps/extension`：Chrome/Edge Manifest V3 扩展骨架，包含 Side Panel、DOM 链接与文本 Magnet 初步采集、`CaptureBatch` 生成、调用本地 Runtime 和展示 `ResourcePlan`。
-- `apps/task-center`：React 迅雷 17 风格任务中心基础页，包含左侧导航、下载中/已完成、智取任务卡、异常状态、一键续取入口与任务详情。
-- `services/runtime`：FastAPI 本地 Runtime，包含 CORS、健康检查、`POST /v1/capture/analyze`、示例任务快照接口和构建后 `/app` 静态托管。
+- `apps/task-center`：阶段 B1 高保真迅雷 17 风格任务中心，包含紧凑侧栏/顶栏、下载中/已完成、扁平任务列表、智取标记、异常状态、可关闭任务详情抽屉和基础界面态交互。
+- `services/runtime`：FastAPI 本地 Runtime，包含 CORS、健康检查、`POST /v1/capture/analyze`、阶段 B 示例任务快照接口和构建后 `/app` 静态托管；未构建前访问 `/app` 会给出明确构建提示而不是裸 404。
 - `ModelProviderAdapter`：统一模型调用边界。
 - `FixtureProvider`：默认离线演示，执行轻量确定性去噪和场景化选择。
 - `OpenAICompatibleProvider`：只在 Runtime 中读取 API Key，通过 OpenAI 兼容 `/chat/completions` 接口调用模型并校验结构化输出。
 - `packages/contracts`：临时 TypeScript 契约；Runtime 中有对应 Pydantic v2 模型。
 - 少量关键测试：Fixture 选型和分析 API。
+
+
+## 阶段 B 迭代拆分
+
+- **B1（本版本）**：高保真下载主界面、下载中/已完成、任务行、选中态与详情抽屉。
+- **B2**：Runtime 中可创建/更新的轻量 `ResourceJobSnapshot` 数据流与进度刷新。
+- **B3**：只补下载链路需要的云盘目的地差异与链接库历史。
+- **B4**：收口“目标、选择、问题、下一步”和少量关键回归，然后进入阶段 C。
 
 ## 尚未实现
 
@@ -94,7 +102,7 @@ uv run --project services/runtime pytest
 uv run --project services/runtime ruff check services/runtime
 ```
 
-构建任务中心后，Runtime 会自动托管：`http://127.0.0.1:8765/app`
+构建任务中心后，Runtime 会自动托管：`http://127.0.0.1:8765/app/`。任务中心生产构建的 Vite base 已固定为 `/app/`；如果先启动 Runtime、后构建前端，需要重启 Runtime 让静态挂载生效。
 
 ## 切换 OpenAI 兼容模型
 

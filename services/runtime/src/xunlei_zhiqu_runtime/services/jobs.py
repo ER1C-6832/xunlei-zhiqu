@@ -4,6 +4,12 @@ from xunlei_zhiqu_runtime.models import ResourceJobSnapshot
 
 
 def fixture_jobs() -> list[ResourceJobSnapshot]:
+    """Small stage-B fixture set for the task center.
+
+    It intentionally covers the UI states we need to validate now: a healthy
+    Zhiqu task, a source-loss task, a normal completed download, and a
+    completed Zhiqu delivery. This is not a persistence layer.
+    """
     now = datetime.now(UTC)
     return [
         ResourceJobSnapshot(
@@ -36,7 +42,7 @@ def fixture_jobs() -> list[ResourceJobSnapshot]:
             speed_bytes_per_second=0,
             eta_seconds=None,
             stage_label="来源失效，等待继续获取",
-            issue="主来源返回 503，已保存原页面和 42% 下载进度。",
+            issue="主来源返回 503，原页面、候选与 42% 进度均已保留。",
             next_action="continue_acquisition",
             source_count=2,
             excluded_count=8,
@@ -46,7 +52,7 @@ def fixture_jobs() -> list[ResourceJobSnapshot]:
         ResourceJobSnapshot(
             job_id="job_normal_001",
             title="sample-dataset.zip",
-            subtitle="普通下载",
+            subtitle="普通下载 · ZIP 压缩包",
             kind="normal",
             status="completed",
             progress=100,
@@ -60,5 +66,23 @@ def fixture_jobs() -> list[ResourceJobSnapshot]:
             excluded_count=0,
             created_at=now - timedelta(days=1),
             destination="D:/Downloads/sample-dataset.zip",
+        ),
+        ResourceJobSnapshot(
+            job_id="job_zhiqu_003",
+            title="Open Tools Pack 2026.08",
+            subtitle="Windows x64 安装包 · 文档 · SHA-256 校验文件",
+            kind="zhiqu",
+            status="completed",
+            progress=100,
+            downloaded_bytes=734_000_000,
+            total_bytes=734_000_000,
+            speed_bytes_per_second=0,
+            eta_seconds=None,
+            stage_label="已完成并交付",
+            next_action="open",
+            source_count=2,
+            excluded_count=6,
+            created_at=now - timedelta(days=2, hours=3),
+            destination="D:/Downloads/Open Tools Pack 2026.08",
         ),
     ]

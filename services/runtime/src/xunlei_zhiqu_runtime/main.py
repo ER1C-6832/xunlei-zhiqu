@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from xunlei_zhiqu_runtime import __version__
@@ -66,6 +66,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 TASK_CENTER_DIST = PROJECT_ROOT / "apps" / "task-center" / "dist"
 if TASK_CENTER_DIST.exists():
     app.mount("/app", StaticFiles(directory=TASK_CENTER_DIST, html=True), name="task-center")
+else:
+    @app.get("/app", include_in_schema=False, response_class=HTMLResponse)
+    async def task_center_not_built() -> str:
+        return """
+        <!doctype html>
+        <html lang="zh-CN">
+          <meta charset="utf-8">
+          <title>迅雷智取任务中心尚未构建</title>
+          <body style="font-family:system-ui;padding:40px;color:#293241">
+            <h2>任务中心尚未构建</h2>
+            <p>请在仓库根目录运行 <code>corepack pnpm --filter @xunlei-zhiqu/task-center build</code>，然后重启 Runtime。</p>
+            <p>开发模式可直接访问 <code>http://127.0.0.1:5173/</code>。</p>
+          </body>
+        </html>
+        """
 
 
 @app.get("/", include_in_schema=False)
