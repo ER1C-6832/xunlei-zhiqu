@@ -7,6 +7,7 @@ export type CaptureChannel =
   | 'image'
   | 'manual';
 export type DeliveryTarget = 'local' | 'cloud';
+export type ResourceType = 'software' | 'video' | 'audio' | 'image' | 'archive' | 'mixed' | 'unknown';
 
 export interface DomRect {
   x: number;
@@ -91,7 +92,7 @@ export interface ResourcePlan {
   plan_id: string;
   batch_id: string;
   provider: string;
-  resource_type: 'software' | 'video' | 'audio' | 'image' | 'archive' | 'mixed' | 'unknown';
+  resource_type: ResourceType;
   resource_title: string;
   overview: string;
   selected: PlanItem[];
@@ -105,6 +106,14 @@ export interface ResourceJobCreateRequest {
   schema_version: '0.1';
   plan: ResourcePlan;
   capture?: CaptureBatch | null;
+  delivery_target?: DeliveryTarget;
+  destination?: string | null;
+}
+
+export interface ManualJobCreateRequest {
+  schema_version: '0.1';
+  links: string[];
+  title?: string | null;
   delivery_target?: DeliveryTarget;
   destination?: string | null;
 }
@@ -130,6 +139,11 @@ export interface ResourceJobSnapshot {
   delivery_target?: DeliveryTarget;
   plan_id?: string | null;
   execution_mode?: 'demo' | 'download_engine';
+  resource_type?: ResourceType;
+  plan_overview?: string | null;
+  selected_items?: string[];
+  alternative_count?: number;
+  source_page?: string | null;
 }
 
 export interface LinkHistoryItem {
@@ -140,7 +154,20 @@ export interface LinkHistoryItem {
   size_bytes?: number | null;
   added_at: string;
   job_id?: string | null;
-  delivery_target?: DeliveryTarget;
-  status: 'active' | 'completed' | 'failed';
+  delivery_target?: DeliveryTarget | null;
+  status: 'active' | 'completed' | 'failed' | 'saved';
   source_page?: string | null;
+  resource_type?: ResourceType | null;
+  favorite?: boolean;
+  favorite_at?: string | null;
+}
+
+export interface LinkFavoriteCreateRequest {
+  schema_version: '0.1';
+  plan: ResourcePlan;
+  capture?: CaptureBatch | null;
+}
+
+export interface LinkFavoriteUpdateRequest {
+  favorite: boolean;
 }
