@@ -112,6 +112,13 @@ class ResourcePlan(BaseModel):
     recommendations: list[ScenarioRecommendation] = Field(default_factory=list)
 
 
+class ResourceJobCreateRequest(BaseModel):
+    schema_version: Literal["0.1"] = "0.1"
+    plan: ResourcePlan
+    capture: CaptureBatch | None = None
+    destination: str | None = None
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     provider: str
@@ -138,3 +145,5 @@ class ResourceJobSnapshot(BaseModel):
     excluded_count: int = Field(ge=0)
     created_at: datetime
     destination: str | None = None
+    plan_id: str | None = None
+    execution_mode: Literal["demo", "download_engine"] = "demo"
