@@ -1,0 +1,249 @@
+.nav-soft-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 9px;
+  color: #2878f0;
+  background: #e5efff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.cloud-tag {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #0b77a9;
+  background: #e7f7ff;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.cloud-context {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 22px;
+  color: #526170;
+  background: linear-gradient(90deg, #f4f9ff, #fbfdff);
+  border-bottom: 1px solid #eaf0f6;
+}
+.cloud-context > div { display: flex; align-items: center; gap: 8px; }
+.cloud-context svg { color: #2878f0; }
+.cloud-context strong { color: #28323f; font-size: 13px; }
+.cloud-context span, .cloud-context small { color: #8c96a3; font-size: 9px; }
+
+.link-page {
+  height: calc(100vh - 50px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+}
+
+.link-titlebar {
+  min-height: 54px;
+  display: flex;
+  align-items: stretch;
+  gap: 26px;
+  padding: 0 22px;
+  border-bottom: 1px solid #eceef1;
+}
+.link-titlebar > button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  color: #8a919c;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 700;
+}
+.link-titlebar > button.active { color: #171b22; }
+.link-titlebar > button.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: #1f2329;
+}
+.link-titlebar > button span {
+  min-width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 4px;
+  border-radius: 8px;
+  color: #9ea6b1;
+  background: #f0f1f3;
+  font-size: 9px;
+}
+.link-sync {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #87919e;
+  font-size: 9px;
+}
+.link-sync svg { color: #2878f0; }
+
+.link-toolbar {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  padding: 0 22px;
+  border-bottom: 1px solid #f1f2f4;
+}
+.history-filters { display: flex; gap: 8px; }
+.history-filters button {
+  height: 27px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: #79818d;
+  background: #f4f5f7;
+  font-size: 10px;
+}
+.history-filters button.active { color: #fff; background: #313945; }
+.history-view-switch { margin-left: auto; display: flex; gap: 5px; }
+.history-view-switch button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  color: #606873;
+  background: #fff;
+}
+.history-view-switch button.active { color: #176be6; border-color: #b8d4f9; background: #eef5ff; }
+
+.history-columns {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px 160px;
+  align-items: center;
+  padding: 0 30px 0 72px;
+  color: #9da4ae;
+  border-bottom: 1px solid #f4f5f6;
+  font-size: 9px;
+}
+
+.history-list,
+.history-grid {
+  flex: 1;
+  overflow: auto;
+  padding: 0 18px 24px;
+  scrollbar-color: #d7dbe0 transparent;
+  scrollbar-width: thin;
+}
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  align-content: start;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.history-item {
+  width: 100%;
+  color: #252b34;
+  background: #fff;
+  text-align: left;
+}
+.history-item.list {
+  min-height: 74px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 140px 160px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid #f1f2f4;
+}
+.history-item.list:hover { background: #f8fafc; }
+.history-item.grid {
+  min-height: 148px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  align-content: start;
+  padding: 15px;
+  border: 1px solid #eceef2;
+  border-radius: 9px;
+}
+.history-item.grid:hover { border-color: #bfd5f3; background: #fbfdff; }
+
+.history-file-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: #6f7b89;
+  background: #eef1f4;
+}
+.history-file-icon.media { color: #8d6dce; background: #f2edff; }
+.history-file-icon.image { color: #d68a48; background: #fff3e8; }
+.history-file-icon.document { color: #3d78c9; background: #eaf3ff; }
+.history-file-icon.archive { color: #798490; background: #edf0f3; }
+
+.history-main { min-width: 0; display: grid; gap: 4px; }
+.history-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.history-main > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #97a0ac;
+  font-size: 9px;
+}
+.history-main > span svg { flex: 0 0 auto; color: #55a1e8; }
+.history-main small { color: #a3aab4; font-size: 8px; }
+.history-type, .history-time { color: #9199a4; font-size: 9px; }
+.history-type { display: grid; gap: 4px; justify-items: start; }
+.history-type .failed { color: #dc8d17; }
+.history-item.grid .history-type, .history-item.grid .history-time { grid-column: 2; }
+.history-item.grid .history-time { margin-top: -3px; }
+
+.history-empty {
+  min-height: 360px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  color: #9ba3ad;
+  text-align: center;
+}
+.history-empty svg { color: #6da2df; }
+.history-empty strong { color: #5f6670; font-size: 12px; }
+.history-empty span { font-size: 10px; }
+
+@media (max-width: 900px) {
+  .history-columns { grid-template-columns: minmax(0, 1fr) 100px; padding-left: 72px; }
+  .history-columns span:last-child { display: none; }
+  .history-item.list { grid-template-columns: 42px minmax(0, 1fr) 100px; }
+  .history-item.list .history-time { display: none; }
+  .cloud-context small { display: none; }
+}
+
+@media (max-width: 680px) {
+  .history-columns { display: none; }
+  .history-item.list { grid-template-columns: 42px minmax(0, 1fr); }
+  .history-item.list .history-type { grid-column: 2; }
+  .history-view-switch { display: none; }
+  .history-filters { overflow-x: auto; }
+  .cloud-context span { display: none; }
+}
