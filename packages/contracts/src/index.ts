@@ -100,6 +100,13 @@ export interface ResourcePlan {
   recommendations: ScenarioRecommendation[];
 }
 
+export interface ResourceJobCreateRequest {
+  schema_version: '0.1';
+  plan: ResourcePlan;
+  capture?: CaptureBatch | null;
+  destination?: string | null;
+}
+
 export interface ResourceJobSnapshot {
   job_id: string;
   title: string;
@@ -118,4 +125,6 @@ export interface ResourceJobSnapshot {
   excluded_count: number;
   created_at: string;
   destination?: string | null;
+  plan_id?: string | null;
+  execution_mode?: 'demo' | 'download_engine';
 }
