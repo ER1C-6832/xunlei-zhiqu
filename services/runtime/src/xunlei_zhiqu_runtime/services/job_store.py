@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from xunlei_zhiqu_runtime.models import ResourceJobCreateRequest, ResourceJobSnapshot
@@ -56,7 +57,7 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
         next_action="pause",
         source_count=max(1, len(source_ids)),
         excluded_count=len(excluded_ids),
-        created_at=payload.plan.model_fields_set and __import__("datetime").datetime.now(__import__("datetime").UTC),
+        created_at=datetime.now(UTC),
         destination=payload.destination,
         plan_id=payload.plan.plan_id,
         execution_mode="demo",
