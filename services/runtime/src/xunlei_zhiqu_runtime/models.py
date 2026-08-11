@@ -4,6 +4,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+ResourceType = Literal["software", "video", "audio", "image", "archive", "mixed", "unknown"]
+DeliveryTarget = Literal["local", "cloud"]
+
+
 class DomRect(BaseModel):
     x: float
     y: float
@@ -100,9 +104,7 @@ class ResourcePlan(BaseModel):
     plan_id: str
     batch_id: str
     provider: str
-    resource_type: Literal[
-        "software", "video", "audio", "image", "archive", "mixed", "unknown"
-    ]
+    resource_type: ResourceType
     resource_title: str
     overview: str
     selected: list[PlanItem] = Field(default_factory=list)
@@ -116,8 +118,26 @@ class ResourceJobCreateRequest(BaseModel):
     schema_version: Literal["0.1"] = "0.1"
     plan: ResourcePlan
     capture: CaptureBatch | None = None
-    delivery_target: Literal["local", "cloud"] = "local"
+    delivery_target: DeliveryTarget = "local"
     destination: str | None = None
+
+
+class ManualJobCreateRequest(BaseModel):
+    schema_version: Literal["0.1"] = "0.1"
+    links: list[str] = Field(min_length=1, max_length=50)
+    title: str | None = None
+    delivery_target: DeliveryTarget = "local"
+    destination: str | None = None
+
+
+class LinkFavoriteCreateRequest(BaseModel):
+    schema_version: Literal["0.1"] = "0.1"
+    plan: ResourcePlan
+    capture: CaptureBatch | None = None
+
+
+class LinkFavoriteUpdateRequest(BaseModel):
+    favorite: bool
 
 
 class HealthResponse(BaseModel):
@@ -146,9 +166,14 @@ class ResourceJobSnapshot(BaseModel):
     excluded_count: int = Field(ge=0)
     created_at: datetime
     destination: str | None = None
-    delivery_target: Literal["local", "cloud"] = "local"
+    delivery_target: DeliveryTarget = "local"
     plan_id: str | None = None
     execution_mode: Literal["demo", "download_engine"] = "demo"
+    resource_type: ResourceType = "unknown"
+    plan_overview: str | None = None
+    selected_items: list[str] = Field(default_factory=list)
+    alternative_count: int = Field(default=0, ge=0)
+    source_page: str | None = None
 
 
 class LinkHistoryItem(BaseModel):
@@ -159,6 +184,9 @@ class LinkHistoryItem(BaseModel):
     size_bytes: int | None = Field(default=None, ge=0)
     added_at: datetime
     job_id: str | None = None
-    delivery_target: Literal["local", "cloud"] = "local"
-    status: Literal["active", "completed", "failed"]
+    delivery_target: DeliveryTarget | None = None
+    status: Literal["active", "completed", "failed", "saved"]
     source_page: str | None = None
+    resource_type: ResourceType | None = None
+    favorite: bool = False
+    favorite_at: datetime | None = None
