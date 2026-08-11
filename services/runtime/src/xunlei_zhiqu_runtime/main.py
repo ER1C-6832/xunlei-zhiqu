@@ -2,18 +2,29 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from xunlei_zhiqu_runtime import __version__
 from xunlei_zhiqu_runtime.config import get_settings
-from xunlei_zhiqu_runtime.models import CaptureBatch, HealthResponse, ResourceJobSnapshot, ResourcePlan
+from xunlei_zhiqu_runtime.models import (
+    CaptureBatch,
+    HealthResponse,
+    ResourceJobCreateRequest,
+    ResourceJobSnapshot,
+    ResourcePlan,
+)
 from xunlei_zhiqu_runtime.providers.factory import create_provider
 from xunlei_zhiqu_runtime.services.analyzer import CaptureAnalyzer
-from xunlei_zhiqu_runtime.services.jobs import fixture_jobs
-from xunlei_zhiqu_runtime.services.job_store import create_job, list_created_jobs
+from xunlei_zhiqu_runtime.services.job_store import (
+    create_job,
+    get_job,
+    list_jobs as list_stored_jobs,
+    pause_job,
+    resume_job,
+)
 
 
 @asynccontextmanager
@@ -35,7 +46,12 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:8765", "http://localhost:8765"],
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+    ],
     allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
@@ -54,16 +70,43 @@ async def analyze_capture(batch: CaptureBatch, request: Request) -> ResourcePlan
 
 
 @app.post("/v1/jobs", response_model=ResourceJobSnapshot)
-async def create_resource_job(payload: dict) -> ResourceJobSnapshot:
-    plan = payload.get("plan", {})
-    title = plan.get("resource_title", "未命名资源")
-    subtitle = plan.get("overview", "节点 A 资源计划")
-    return create_job(title, subtitle, plan.get("plan_id", "unknown"), payload.get("destination"))
+async def create_resource_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
+    return create_job(payload)
 
 
 @app.get("/v1/jobs", response_model=list[ResourceJobSnapshot])
 async def list_jobs() -> list[ResourceJobSnapshot]:
-    return list_created_jobs() + fixture_jobs()
+    return list_stored_jobs()
+
+
+@app.get("/v1/jobs/{job_id}", response_model=ResourceJobSnapshot)
+async def read_job(job_id: str) -> ResourceJobSnapshot:
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="ResourceJob not found")
+    return job
+
+
+@app.post("/v1/jobs/{job_id}/pause", response_model=ResourceJobSnapshot)
+async def pause_resource_job(job_id: str) -> ResourceJobSnapshot:
+    try:
+        job = pause_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="ResourceJob not found")
+    return job
+
+
+@app.post("/v1/jobs/{job_id}/resume", response_model=ResourceJobSnapshot)
+async def resume_resource_job(job_id: str) -> ResourceJobSnapshot:
+    try:
+        job = resume_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="ResourceJob not found")
+    return job
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -73,7 +116,18 @@ if TASK_CENTER_DIST.exists():
 else:
     @app.get("/app", include_in_schema=False, response_class=HTMLResponse)
     async def task_center_not_built() -> str:
-        return "<h2>任务中心尚未构建</h2><p>请先执行 task-center build。</p>"
+        return """
+        <!doctype html>
+        <html lang="zh-CN">
+          <meta charset="utf-8">
+          <title>迅雷智取任务中心尚未构建</title>
+          <body style="font-family:system-ui;padding:40px;color:#293241">
+            <h2>任务中心尚未构建</h2>
+            <p>请在仓库根目录运行 <code>corepack pnpm --filter @xunlei-zhiqu/task-center build</code>，然后重启 Runtime。</p>
+            <p>开发模式可直接访问 <code>http://127.0.0.1:5173/</code>。</p>
+          </body>
+        </html>
+        """
 
 
 @app.get("/", include_in_schema=False)
