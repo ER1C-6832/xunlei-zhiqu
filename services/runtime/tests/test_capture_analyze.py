@@ -1,8 +1,6 @@
 from fastapi.testclient import TestClient
 
 from xunlei_zhiqu_runtime.main import app
-from xunlei_zhiqu_runtime.models import CaptureBatch
-from xunlei_zhiqu_runtime.providers.fixture import FixtureProvider
 
 
 SAMPLE = {
@@ -50,19 +48,14 @@ SAMPLE = {
 }
 
 
-async def test_fixture_provider_prefers_current_device() -> None:
-    batch = CaptureBatch.model_validate(SAMPLE)
-    plan = await FixtureProvider().analyze(batch, {})
-    assert plan.selected[0].candidate_ids == ["c1"]
-    assert plan.excluded[0].candidate_ids == ["c3"]
-    assert plan.provider == "fixture"
-
-
 def test_analyze_endpoint_returns_resource_plan(monkeypatch) -> None:
     monkeypatch.setenv("MODEL_PROVIDER", "fixture")
     with TestClient(app) as client:
         response = client.post("/v1/capture/analyze", json=SAMPLE)
+
     assert response.status_code == 200
     body = response.json()
     assert body["batch_id"] == "batch_test"
+    assert body["provider"] == "fixture"
     assert body["selected"][0]["candidate_ids"] == ["c1"]
+    assert body["excluded"][0]["candidate_ids"] == ["c3"]
