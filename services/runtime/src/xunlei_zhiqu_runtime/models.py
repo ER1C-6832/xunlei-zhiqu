@@ -116,6 +116,7 @@ class ResourceJobCreateRequest(BaseModel):
     schema_version: Literal["0.1"] = "0.1"
     plan: ResourcePlan
     capture: CaptureBatch | None = None
+    delivery_target: Literal["local", "cloud"] = "local"
     destination: str | None = None
 
 
@@ -145,5 +146,19 @@ class ResourceJobSnapshot(BaseModel):
     excluded_count: int = Field(ge=0)
     created_at: datetime
     destination: str | None = None
+    delivery_target: Literal["local", "cloud"] = "local"
     plan_id: str | None = None
     execution_mode: Literal["demo", "download_engine"] = "demo"
+
+
+class LinkHistoryItem(BaseModel):
+    history_id: str
+    title: str
+    link_type: Literal["http", "magnet", "media", "unknown"]
+    display_link: str
+    size_bytes: int | None = Field(default=None, ge=0)
+    added_at: datetime
+    job_id: str | None = None
+    delivery_target: Literal["local", "cloud"] = "local"
+    status: Literal["active", "completed", "failed"]
+    source_page: str | None = None
