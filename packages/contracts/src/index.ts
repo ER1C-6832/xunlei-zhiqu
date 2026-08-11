@@ -6,6 +6,7 @@ export type CaptureChannel =
   | 'media_network'
   | 'image'
   | 'manual';
+export type DeliveryTarget = 'local' | 'cloud';
 
 export interface DomRect {
   x: number;
@@ -104,6 +105,7 @@ export interface ResourceJobCreateRequest {
   schema_version: '0.1';
   plan: ResourcePlan;
   capture?: CaptureBatch | null;
+  delivery_target?: DeliveryTarget;
   destination?: string | null;
 }
 
@@ -125,6 +127,20 @@ export interface ResourceJobSnapshot {
   excluded_count: number;
   created_at: string;
   destination?: string | null;
+  delivery_target?: DeliveryTarget;
   plan_id?: string | null;
   execution_mode?: 'demo' | 'download_engine';
+}
+
+export interface LinkHistoryItem {
+  history_id: string;
+  title: string;
+  link_type: 'http' | 'magnet' | 'media' | 'unknown';
+  display_link: string;
+  size_bytes?: number | null;
+  added_at: string;
+  job_id?: string | null;
+  delivery_target?: DeliveryTarget;
+  status: 'active' | 'completed' | 'failed';
+  source_page?: string | null;
 }
