@@ -12,7 +12,10 @@ from xunlei_zhiqu_runtime.config import get_settings
 from xunlei_zhiqu_runtime.models import (
     CaptureBatch,
     HealthResponse,
+    LinkFavoriteCreateRequest,
+    LinkFavoriteUpdateRequest,
     LinkHistoryItem,
+    ManualJobCreateRequest,
     ResourceJobCreateRequest,
     ResourceJobSnapshot,
     ResourcePlan,
@@ -20,12 +23,15 @@ from xunlei_zhiqu_runtime.models import (
 from xunlei_zhiqu_runtime.providers.factory import create_provider
 from xunlei_zhiqu_runtime.services.analyzer import CaptureAnalyzer
 from xunlei_zhiqu_runtime.services.job_store import (
+    create_favorite,
     create_job,
+    create_manual_job,
     get_job,
     list_jobs as list_stored_jobs,
     list_link_history,
     pause_job,
     resume_job,
+    set_favorite,
 )
 
 
@@ -43,7 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="迅雷智取 Runtime",
     version=__version__,
-    description="单编排器、双智能节点、确定性执行的本地 Runtime 骨架。",
+    description="单编排器、双智能节点、确定性执行的本地 Runtime。",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -74,6 +80,14 @@ async def analyze_capture(batch: CaptureBatch, request: Request) -> ResourcePlan
 @app.post("/v1/jobs", response_model=ResourceJobSnapshot)
 async def create_resource_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
     return create_job(payload)
+
+
+@app.post("/v1/jobs/manual", response_model=ResourceJobSnapshot)
+async def create_manual_resource_job(payload: ManualJobCreateRequest) -> ResourceJobSnapshot:
+    try:
+        return create_manual_job(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/v1/jobs", response_model=list[ResourceJobSnapshot])
@@ -112,8 +126,22 @@ async def resume_resource_job(job_id: str) -> ResourceJobSnapshot:
 
 
 @app.get("/v1/link-history", response_model=list[LinkHistoryItem])
-async def read_link_history() -> list[LinkHistoryItem]:
+@app.get("/v1/link-library", response_model=list[LinkHistoryItem])
+async def read_link_library() -> list[LinkHistoryItem]:
     return list_link_history()
+
+
+@app.post("/v1/link-library/favorites", response_model=LinkHistoryItem)
+async def create_link_favorite(payload: LinkFavoriteCreateRequest) -> LinkHistoryItem:
+    return create_favorite(payload)
+
+
+@app.post("/v1/link-library/{history_id}/favorite", response_model=LinkHistoryItem)
+async def update_link_favorite(history_id: str, payload: LinkFavoriteUpdateRequest) -> LinkHistoryItem:
+    item = set_favorite(history_id, payload.favorite)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Link library item not found")
+    return item
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
