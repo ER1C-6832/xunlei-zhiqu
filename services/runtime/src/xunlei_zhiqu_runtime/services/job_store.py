@@ -66,11 +66,12 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
         if existing.plan_id == payload.plan.plan_id:
             return existing
 
-    selected_ids = {
+    selected_order = [
         candidate_id
         for item in payload.plan.selected
         for candidate_id in item.candidate_ids
-    }
+    ]
+    selected_ids = set(selected_order)
     source_ids = selected_ids | {
         candidate_id
         for item in payload.plan.alternatives
@@ -85,7 +86,7 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
     total_bytes = 0
     if payload.capture:
         candidate_map = {candidate.candidate_id: candidate for candidate in payload.capture.candidates}
-        for candidate_id in selected_ids:
+        for candidate_id in selected_order:
             candidate = candidate_map.get(candidate_id)
             if candidate and candidate.probe_facts and candidate.probe_facts.content_length:
                 total_bytes += candidate.probe_facts.content_length
@@ -124,7 +125,7 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
     _jobs.insert(0, job)
     _created_job_ids.add(job.job_id)
     _job_contexts[job.job_id] = payload
-    _record_history(job, payload, selected_ids)
+    _record_history(job, payload, selected_order)
     return job
 
 
@@ -198,12 +199,12 @@ def resume_job(job_id: str) -> ResourceJobSnapshot | None:
 def _record_history(
     job: ResourceJobSnapshot,
     payload: ResourceJobCreateRequest,
-    selected_ids: set[str],
+    selected_order: list[str],
 ) -> None:
     candidate = None
     if payload.capture:
         candidate_map = {item.candidate_id: item for item in payload.capture.candidates}
-        candidate = next((candidate_map[cid] for cid in selected_ids if cid in candidate_map), None)
+        candidate = next((candidate_map[cid] for cid in selected_order if cid in candidate_map), None)
 
     raw_value = candidate.value if candidate else payload.capture.page.url if payload.capture else "resource-plan"
     link_type = _link_type(raw_value, candidate.candidate_type if candidate else None)
