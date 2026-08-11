@@ -12,6 +12,7 @@ from xunlei_zhiqu_runtime.config import get_settings
 from xunlei_zhiqu_runtime.models import (
     CaptureBatch,
     HealthResponse,
+    LinkHistoryItem,
     ResourceJobCreateRequest,
     ResourceJobSnapshot,
     ResourcePlan,
@@ -22,6 +23,7 @@ from xunlei_zhiqu_runtime.services.job_store import (
     create_job,
     get_job,
     list_jobs as list_stored_jobs,
+    list_link_history,
     pause_job,
     resume_job,
 )
@@ -107,6 +109,11 @@ async def resume_resource_job(job_id: str) -> ResourceJobSnapshot:
     if job is None:
         raise HTTPException(status_code=404, detail="ResourceJob not found")
     return job
+
+
+@app.get("/v1/link-history", response_model=list[LinkHistoryItem])
+async def read_link_history() -> list[LinkHistoryItem]:
+    return list_link_history()
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
