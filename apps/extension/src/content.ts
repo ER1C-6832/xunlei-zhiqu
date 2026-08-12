@@ -156,6 +156,58 @@ function runAutomaticScan(tabId: number | undefined): CaptureResponse {
   }
 }
 
+function runPersistentDiscoveryCapture(tabId: number | undefined): CaptureResponse {
+  activeCleanup?.();
+  clearPlanAnnotations();
+  try {
+    const discovery = refreshPersistentDiscovery();
+    const wanted = new Set(discovery.items.map((item) => discoveryIdentity(item.value)));
+    if (!wanted.size) {
+      return { ok: false, error: '当前可见区域没有自动发现到高置信资源。' };
+    }
+
+    const rect: DomRect = {
+      x: 0,
+      y: 0,
+      width: window.innerWidth,
+      height: window.innerHeight
+    };
+    const base = enrichFusedCandidateMetadata(buildCaptureBatchFromRect(rect, tabId));
+    const candidates = base.candidates.filter((candidate) => wanted.has(discoveryIdentity(candidate.value)));
+    if (!candidates.length) {
+      return { ok: false, error: '自动发现结果已变化，请等待页面稳定后重试。' };
+    }
+
+    return {
+      ok: true,
+      batch: {
+        ...base,
+        trigger: 'automatic',
+        selection: {
+          type: 'automatic',
+          candidate_ids: candidates.map((candidate) => candidate.candidate_id),
+          rect
+        },
+        candidates,
+        metadata: {
+          ...(base.metadata || {}),
+          capture_version: 'stage-d.2',
+          automatic_scan: 'persistent_discovery_visible_high_confidence',
+          discovery_count: discovery.count
+        }
+      }
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : '自动发现候选读取失败' };
+  }
+}
+
+function discoveryIdentity(value: string): string {
+  if (!value.toLowerCase().startsWith('magnet:')) return value;
+  const match = value.match(/[?&]xt=urn:btih:([^&]+)/i);
+  return match?.[1] ? `magnet:btih:${decodeURIComponent(match[1]).toLowerCase()}` : value;
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'XUNLEI_ZHIQU_START_SELECTION' || message?.type === 'XUNLEI_ZHIQU_CAPTURE') {
     startRectangleSelection(typeof message.tabId === 'number' ? message.tabId : undefined, sendResponse);
@@ -164,6 +216,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'XUNLEI_ZHIQU_AUTO_SCAN') {
     sendResponse(runAutomaticScan(typeof message.tabId === 'number' ? message.tabId : undefined));
+    return false;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_DISCOVERY_CAPTURE') {
+    sendResponse(runPersistentDiscoveryCapture(typeof message.tabId === 'number' ? message.tabId : undefined));
     return false;
   }
 
