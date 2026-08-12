@@ -22,7 +22,7 @@ export function registerNetworkMediaCapture(): void {
     (details) => {
       if (details.tabId < 0 || !/^https?:/i.test(details.url)) return;
       const headers = readHeaders(details.responseHeaders || []);
-      const kind = classifyNetworkMedia(details.url, headers.contentType, details.type);
+      const kind = classifyNetworkMedia(details.url, headers.contentType, String(details.type));
       if (!kind) return;
 
       const record: NetworkMediaRecord = {
@@ -31,7 +31,7 @@ export function registerNetworkMediaCapture(): void {
         mime_type: headers.contentType,
         content_length: headers.contentLength,
         content_disposition: headers.contentDisposition,
-        request_type: details.type,
+        request_type: String(details.type),
         detected_at: Date.now()
       };
       void saveRecord(details.tabId, record);
@@ -89,7 +89,7 @@ async function readRecords(tabId: number): Promise<NetworkMediaRecord[]> {
 function classifyNetworkMedia(
   url: string,
   mimeType: string | null,
-  requestType: chrome.webRequest.ResourceType
+  requestType: string
 ): NetworkMediaKind | null {
   if (HLS_PATTERN.test(url) || isHlsMime(mimeType)) return 'hls_manifest';
   if (DASH_PATTERN.test(url) || isDashMime(mimeType)) return 'dash_manifest';
