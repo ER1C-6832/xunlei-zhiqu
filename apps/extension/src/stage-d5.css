@@ -1,7 +1,7 @@
 .zhiqu-image-launcher {
   position: fixed;
   right: 14px;
-  bottom: 14px;
+  bottom: 72px;
   z-index: 80;
   display: inline-flex;
   align-items: center;
