@@ -37,7 +37,7 @@ const RUNTIME_URL = 'http://127.0.0.1:8765';
 const AUTO_DISCOVERY_STORAGE_KEY = 'zhiqu_auto_discovery_enabled';
 
 type Status = 'idle' | 'selecting' | 'scanning' | 'analyzing' | 'creating' | 'favoriting' | 'error';
-type CaptureMode = 'automatic' | 'rectangle';
+type CaptureMode = 'automatic' | 'rectangle' | 'full_page';
 type DiscoveryKind = 'file' | 'media' | 'magnet' | 'entry';
 type DiscoveryItem = {
   value: string;
@@ -129,7 +129,7 @@ export function StageDExtensionApp() {
     setFavoriteItem(null);
     setConfirmedIds(new Set());
     setAnnotationCount(0);
-    setStatus(mode === 'automatic' ? 'scanning' : 'selecting');
+    setStatus(mode === 'rectangle' ? 'selecting' : 'scanning');
   }
 
   function acceptLocalBatch(nextBatch: CaptureBatch) {
@@ -147,13 +147,25 @@ export function StageDExtensionApp() {
 
       const captureResponse = mode === 'automatic'
         ? await requestAutomaticScan(tab.id)
-        : await requestRectangleSelection(tab.id);
+        : mode === 'full_page'
+          ? await requestFullPageScan(tab.id)
+          : await requestRectangleSelection(tab.id);
 
       if (!captureResponse?.ok) {
-        throw new Error(captureResponse?.error || (mode === 'automatic' ? '没有找到可整理的资源' : '框选失败'));
+        const fallback = mode === 'rectangle'
+          ? '框选失败'
+          : mode === 'full_page'
+            ? '整个网页整理失败'
+            : '没有找到可整理的资源';
+        throw new Error(captureResponse?.error || fallback);
       }
       if (!captureResponse.batch?.candidates?.length) {
-        throw new Error(mode === 'automatic' ? '当前页面没有找到明显的可下载资源，可以改用框选。' : '框选区域内没有找到可下载资源。');
+        const fallback = mode === 'rectangle'
+          ? '框选区域内没有找到可下载资源。'
+          : mode === 'full_page'
+            ? '整个网页没有找到明显的可下载资源。'
+            : '当前页面没有找到明显的可下载资源，可以改用框选或整个网页。';
+        throw new Error(fallback);
       }
 
       acceptLocalBatch(captureResponse.batch as CaptureBatch);
@@ -244,6 +256,29 @@ export function StageDExtensionApp() {
       batch,
       candidateId
     }).catch(() => undefined);
+  }
+
+  async function focusRecommendedResource() {
+    if (!batch || !plan) return;
+    const tabId = await batchTabId(batch);
+    if (!tabId) return;
+    setError(null);
+
+    for (const item of plan.selected) {
+      for (const candidateId of item.candidate_ids) {
+        try {
+          const response = await sendContentMessage(tabId, {
+            type: 'XUNLEI_ZHIQU_FOCUS_CANDIDATE',
+            batch,
+            candidateId
+          });
+          if (response?.ok) return;
+        } catch {
+          // Try the next candidate when one recommendation is not directly represented by a DOM element.
+        }
+      }
+    }
+    setError('网页中暂时无法定位推荐下载项，可以直接查看已经标出的“推荐”标签。');
   }
 
   function toggleItem(itemId: string) {
@@ -344,6 +379,9 @@ export function StageDExtensionApp() {
               <button className="zhiqu-secondary" type="button" onClick={() => captureResources('rectangle')}>
                 <MousePointer2 size={18} />框选页面区域
               </button>
+              <button className="zhiqu-secondary zhiqu-full-page-action" type="button" onClick={() => captureResources('full_page')}>
+                <Search size={17} />整理整个网页
+              </button>
             </div>
           )}
         </section>
@@ -383,6 +421,9 @@ export function StageDExtensionApp() {
                   <MousePointer2 size={17} />框选页面区域
                 </button>
               </div>
+              <button className="zhiqu-secondary zhiqu-full-page-action" type="button" onClick={() => captureResources('full_page')} disabled={busy}>
+                <Search size={17} />{isFullPageBatch(batch) ? '重新整理整个网页' : '整理整个网页'}
+              </button>
             </div>
           )}
         </section>
@@ -415,9 +456,16 @@ export function StageDExtensionApp() {
             <Check size={20} aria-hidden="true" />
           </div>
 
-          {annotationCount > 0 && (
-            <div className="zhiqu-page-note">
-              网页中的推荐下载项已经标出，点击“推荐”可以直接查看解释。
+          {plan.selected.length > 0 && (
+            <div className="zhiqu-page-note zhiqu-page-note-actions">
+              <span>
+                {annotationCount > 0
+                  ? '网页中的推荐下载项已经标出，也可以直接定位过去。'
+                  : '可以把原网页直接滚动到最推荐的下载项。'}
+              </span>
+              <button type="button" onClick={() => void focusRecommendedResource()}>
+                <MousePointer2 size={14} />定位推荐下载
+              </button>
             </div>
           )}
 
@@ -517,6 +565,9 @@ export function StageDExtensionApp() {
             </button>
             <button className="zhiqu-reselect" type="button" onClick={() => captureResources('rectangle')} disabled={busy}>
               <MousePointer2 size={17} />框选其他区域
+            </button>
+            <button className="zhiqu-reselect zhiqu-full-page-action" type="button" onClick={() => captureResources('full_page')} disabled={busy}>
+              <Search size={17} />整理整个网页
             </button>
           </div>
 
@@ -729,10 +780,10 @@ function statusCopy(status: Status) {
     return { title: '在网页上框选资源区域', description: '拖拽覆盖你关心的下载项，松开后只做本地查找。' };
   }
   if (status === 'scanning') {
-    return { title: '正在查找可下载资源', description: '只在本地查看当前页面，不会使用智能分析。' };
+    return { title: '正在查找可下载资源', description: '只在本地查看页面，不会使用智能分析。' };
   }
   if (status === 'error') {
-    return { title: '当前页面的下载资源', description: '可以重新智能整理，或框选一个更明确的区域。' };
+    return { title: '当前页面的下载资源', description: '可以重新智能整理、框选区域，或整理整个网页。' };
   }
   return { title: '当前页面的下载资源', description: '先在本地查找资源，需要推荐时再进行智能分析。' };
 }
@@ -740,13 +791,20 @@ function statusCopy(status: Status) {
 function capturePathTitle(batch: CaptureBatch): string {
   if (batch.trigger === 'rectangle') return '框选结果';
   if (batch.metadata?.automatic_scan === 'persistent_discovery_visible_high_confidence') return '自动发现候选';
+  if (isFullPageBatch(batch)) return '整个网页候选';
   return '当前页扫描结果';
 }
 
 function capturePathDescription(batch: CaptureBatch): string {
   if (batch.trigger === 'rectangle') return '来自你框选的区域。先查看资源，需要推荐时再智能分析。';
   if (batch.metadata?.automatic_scan === 'persistent_discovery_visible_high_confidence') return '来自页面自动发现的高置信资源。它和主动扫描可能不同。';
+  if (isFullPageBatch(batch)) return '来自整个网页，适合版本很多、需要上下滚动的下载页。分析仍由你手动开始。';
   return '来自当前可见页面的主动扫描。先查看资源，需要推荐时再智能分析。';
+}
+
+function isFullPageBatch(batch: CaptureBatch): boolean {
+  return batch.metadata?.automatic_scan === 'full_page_obvious_resources'
+    || batch.metadata?.capture_scope === 'full_page';
 }
 
 function captureSummary(batch: CaptureBatch): string {
@@ -763,10 +821,13 @@ function captureSummary(batch: CaptureBatch): string {
     ['page', '页面'],
     ['unknown', '其他']
   ];
-  return labels
+  const summary = labels
     .filter(([key]) => counts[key])
     .map(([key, label]) => `${label} ${counts[key]}`)
     .join(' · ');
+  return isFullPageBatch(batch) && batch.candidates.length >= 160
+    ? `${summary} · 已达到单次候选上限`
+    : summary;
 }
 
 function discoverySummary(state: DiscoveryState): string {
@@ -780,9 +841,11 @@ function discoverySummary(state: DiscoveryState): string {
 }
 
 function candidateLabel(candidate: CapturedCandidate): string {
+  const anchor = candidate.anchor_text?.replace(/\s+/g, ' ').trim() || null;
   const metadataFilename = typeof candidate.metadata?.filename === 'string' ? candidate.metadata.filename : null;
-  return candidate.display_name
-    || candidate.anchor_text
+  const genericAnchor = anchor && /^(download|下载|click here|here)$/i.test(anchor) ? null : anchor;
+  return genericAnchor
+    || candidate.display_name
     || metadataFilename
     || filenameFromValue(candidate.value)
     || '未命名资源';
@@ -793,7 +856,17 @@ function candidateMeta(candidate: CapturedCandidate): string {
   const extension = typeof candidate.metadata?.extension === 'string'
     ? candidate.metadata.extension
     : extensionFromValue(candidate.value);
-  const parts = [host, extension ? extension.toUpperCase() : null].filter(Boolean);
+  const filename = typeof candidate.metadata?.filename === 'string'
+    ? candidate.metadata.filename
+    : filenameFromValue(candidate.value);
+  const section = candidate.section_heading?.replace(/\s+/g, ' ').trim().slice(0, 80) || null;
+  const label = candidateLabel(candidate);
+  const parts = [
+    section,
+    filename && filename !== label ? filename : null,
+    host,
+    extension ? extension.toUpperCase() : null
+  ].filter(Boolean);
   if (candidate.candidate_type === 'page') parts.push('下载入口');
   if (candidate.candidate_type === 'unknown') parts.push('待识别');
   return parts.join(' · ') || '当前页面';
@@ -877,6 +950,10 @@ async function requestRectangleSelection(tabId: number) {
 
 async function requestAutomaticScan(tabId: number) {
   return sendContentMessage(tabId, { type: 'XUNLEI_ZHIQU_AUTO_SCAN', tabId });
+}
+
+async function requestFullPageScan(tabId: number) {
+  return sendContentMessage(tabId, { type: 'XUNLEI_ZHIQU_FULL_PAGE_SCAN', tabId });
 }
 
 async function projectPlanToPage(batch: CaptureBatch, plan: ResourcePlan): Promise<number> {
