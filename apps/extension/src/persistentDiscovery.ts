@@ -40,6 +40,9 @@ export async function initializePersistentDiscovery(): Promise<void> {
   } catch {
     applyPersistentDiscoveryEnabled(false);
   }
+
+  await hydrateNetworkMedia();
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && changes[AUTO_DISCOVERY_STORAGE_KEY]) {
       applyPersistentDiscoveryEnabled(changes[AUTO_DISCOVERY_STORAGE_KEY].newValue === true);
@@ -84,6 +87,22 @@ export function ingestNetworkMediaDiscovery(notice: NetworkMediaNotice): void {
     if (oldest) networkMedia.delete(oldest);
   }
   if (state.enabled) scheduleDiscovery(120);
+}
+
+async function hydrateNetworkMedia(): Promise<void> {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'XUNLEI_ZHIQU_NETWORK_MEDIA_GET' });
+    if (!response?.ok || !Array.isArray(response.items)) return;
+    for (const item of response.items) {
+      if (!item || typeof item !== 'object') continue;
+      const notice = item as Partial<NetworkMediaNotice>;
+      if (typeof notice.url !== 'string') continue;
+      if (!['media_file', 'hls_manifest', 'dash_manifest'].includes(String(notice.kind))) continue;
+      ingestNetworkMediaDiscovery(notice as NetworkMediaNotice);
+    }
+  } catch {
+    // Network observation is additive. DOM discovery must continue when it is unavailable.
+  }
 }
 
 function startPersistentDiscovery(): void {
