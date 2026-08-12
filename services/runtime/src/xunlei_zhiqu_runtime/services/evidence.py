@@ -17,6 +17,9 @@ _SAFE_METADATA_KEYS = {
     "rel",
     "target",
     "aria_label",
+    "resource_family_hint",
+    "resource_family_ambiguous",
+    "resource_family_candidates",
 }
 
 
@@ -96,7 +99,7 @@ def _extension(filename: str | None, metadata: dict[str, Any]) -> str | None:
     if not filename or "." not in filename:
         return None
     suffix = filename.rsplit(".", 1)[-1].lower()
-    return suffix if 1 <= len(suffix) <= 10 and suffix.isalnum() else None
+    return suffix if 1 <= len(suffix) <= 16 and suffix.isalnum() else None
 
 
 def _provenance(channel: str, metadata: dict[str, Any]) -> list[dict[str, str | None]]:
