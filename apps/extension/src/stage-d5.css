@@ -1,0 +1,178 @@
+.zhiqu-image-launcher {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid #cfe0f8;
+  border-radius: 999px;
+  color: #1559b8;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 8px 24px rgba(35,91,166,.16);
+  font: 700 13px/1 Microsoft YaHei UI, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.zhiqu-image-launcher:hover { background: #f5f9ff; }
+
+.zhiqu-image-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  background: #f4f7fb;
+  color: #162033;
+  font-family: Microsoft YaHei UI, system-ui, sans-serif;
+}
+
+.zhiqu-image-header {
+  display: grid;
+  grid-template-columns: 38px 1fr 38px;
+  gap: 10px;
+  align-items: center;
+  min-height: 66px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e2e8f1;
+  background: #fff;
+}
+
+.zhiqu-image-header > div { min-width: 0; }
+.zhiqu-image-header strong { display: block; font-size: 17px; line-height: 1.25; }
+.zhiqu-image-header span { display: block; margin-top: 3px; color: #77839a; font-size: 12px; }
+
+.zhiqu-image-icon-button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  color: #44536a;
+  background: transparent;
+  cursor: pointer;
+}
+.zhiqu-image-icon-button:hover { background: #f0f4f9; }
+
+.zhiqu-image-filters {
+  display: flex;
+  gap: 7px;
+  padding: 10px 12px 8px;
+  background: #fff;
+}
+
+.zhiqu-image-filters button,
+.zhiqu-image-selection-bar button {
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  color: #526178;
+  background: #fff;
+  font: 600 12px/1 Microsoft YaHei UI, system-ui, sans-serif;
+  cursor: pointer;
+}
+.zhiqu-image-filters button { padding: 7px 11px; }
+.zhiqu-image-filters button.active { border-color: #8dbbfa; color: #1266d6; background: #edf5ff; }
+
+.zhiqu-image-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid #edf1f6;
+  border-bottom: 1px solid #edf1f6;
+  color: #6f7c91;
+  background: #fff;
+  font-size: 12px;
+}
+.zhiqu-image-selection-bar > div { display: flex; gap: 6px; }
+.zhiqu-image-selection-bar button { padding: 6px 9px; }
+
+.zhiqu-image-grid {
+  flex: 1;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  align-content: start;
+  padding: 10px 12px 92px;
+}
+
+.zhiqu-image-tile {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  border: 1px solid #dde5ef;
+  border-radius: 12px;
+  color: inherit;
+  background: #fff;
+  cursor: pointer;
+}
+.zhiqu-image-tile.selected { border-color: #3b8cff; box-shadow: 0 0 0 2px rgba(59,140,255,.12); }
+
+.zhiqu-image-thumb {
+  position: relative;
+  height: 106px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: #8ea0b8;
+  background: #eef3f8;
+}
+.zhiqu-image-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.zhiqu-image-check {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  background: #1677ff;
+  box-shadow: 0 2px 8px rgba(20,88,180,.25);
+}
+
+.zhiqu-image-meta { display: block; padding: 9px 9px 10px; }
+.zhiqu-image-meta strong,
+.zhiqu-image-meta span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zhiqu-image-meta strong { font-size: 12px; }
+.zhiqu-image-meta span { margin-top: 4px; color: #77839a; font-size: 11px; }
+
+.zhiqu-image-empty,
+.zhiqu-image-error {
+  margin: 14px 12px;
+  padding: 18px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+.zhiqu-image-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 90px;
+  color: #718097;
+  background: #fff;
+}
+.zhiqu-image-error { color: #9b5b08; background: #fff5df; border: 1px solid #f3cd83; }
+
+.zhiqu-image-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 12px 13px;
+  border-top: 1px solid #e1e7ef;
+  background: rgba(255,255,255,.96);
+  backdrop-filter: blur(10px);
+}
+.zhiqu-image-footer .zhiqu-primary { width: 100%; min-height: 44px; }
