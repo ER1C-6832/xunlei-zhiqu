@@ -83,24 +83,15 @@ async def analyze_capture(batch: CaptureBatch, request: Request) -> ResourcePlan
     try:
         return await request.app.state.analyzer.analyze(batch)
     except ModelProviderTimeoutError as exc:
-        raise HTTPException(
-            status_code=504,
-            detail={"code": "model_timeout", "message": str(exc), "retryable": True},
-        ) from exc
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except ModelProviderRequestError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"code": "model_request_failed", "message": str(exc), "retryable": True},
-        ) from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ModelProviderResponseError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"code": "invalid_model_response", "message": str(exc), "retryable": True},
-        ) from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=502,
-            detail={"code": "invalid_resource_plan", "message": str(exc), "retryable": True},
+            detail=f"模型返回的 ResourcePlan 未通过确定性校验：{exc}",
         ) from exc
 
 
