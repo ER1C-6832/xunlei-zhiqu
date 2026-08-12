@@ -27,8 +27,11 @@ export function enrichFusedCandidateMetadata(batch: CaptureBatch): CaptureBatch 
         controls: media.controls,
         duration_seconds: Number.isFinite(media.duration) ? Math.round(media.duration * 100) / 100 : null,
         video_width: media instanceof HTMLVideoElement ? media.videoWidth || null : null,
-        video_height: media instanceof HTMLVideoElement ? media.videoHeight || null : null
+        video_height: media instanceof HTMLVideoElement ? media.videoHeight || null : null,
+        dynamic_media_signal: value.startsWith('blob:'),
+        directly_downloadable: !value.startsWith('blob:')
       });
+      if (value.startsWith('blob:')) candidate.probe_status = 'skipped';
     }
 
     for (const source of media.querySelectorAll<HTMLSourceElement>('source[src]')) {
@@ -48,8 +51,11 @@ export function enrichFusedCandidateMetadata(batch: CaptureBatch): CaptureBatch 
         controls: media.controls,
         duration_seconds: Number.isFinite(media.duration) ? Math.round(media.duration * 100) / 100 : null,
         video_width: media instanceof HTMLVideoElement ? media.videoWidth || null : null,
-        video_height: media instanceof HTMLVideoElement ? media.videoHeight || null : null
+        video_height: media instanceof HTMLVideoElement ? media.videoHeight || null : null,
+        dynamic_media_signal: value.startsWith('blob:'),
+        directly_downloadable: !value.startsWith('blob:')
       });
+      if (value.startsWith('blob:')) candidate.probe_status = 'skipped';
     }
   }
 
