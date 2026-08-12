@@ -1,9 +1,32 @@
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+
+function assertSelfContainedContentScript(): Plugin {
+  return {
+    name: 'assert-self-contained-content-script',
+    generateBundle(_options, bundle) {
+      const contentChunk = Object.values(bundle).find(
+        (item) => item.type === 'chunk' && item.name === 'content'
+      );
+      if (!contentChunk || contentChunk.type !== 'chunk') {
+        this.error('content.js entry was not generated');
+        return;
+      }
+      if (contentChunk.imports.length || contentChunk.dynamicImports.length) {
+        this.error(
+          `MV3 content.js must be self-contained; found imports: ${[
+            ...contentChunk.imports,
+            ...contentChunk.dynamicImports
+          ].join(', ')}`
+        );
+      }
+    }
+  };
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), assertSelfContainedContentScript()],
   build: {
     emptyOutDir: true,
     rollupOptions: {
