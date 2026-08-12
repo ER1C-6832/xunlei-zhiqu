@@ -3,7 +3,7 @@
   "name": "迅雷智取",
   "version": "0.1.0",
   "description": "整理复杂下载页面中的版本、格式和附件，确认后交给本地迅雷智取任务中心。",
-  "permissions": ["sidePanel", "storage", "tabs", "activeTab", "scripting"],
+  "permissions": ["sidePanel", "storage", "tabs", "activeTab", "scripting", "webRequest"],
   "host_permissions": [
     "http://127.0.0.1:8765/*",
     "http://localhost:8765/*",
