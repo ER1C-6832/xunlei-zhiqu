@@ -210,8 +210,10 @@ async function runPersistentDiscoveryCapture(tabId: number | undefined): Promise
         metadata: {
           ...(fused.metadata || {}),
           capture_version: 'stage-d.5',
-          automatic_scan: 'persistent_discovery_full_dom_high_confidence',
+          // Keep the established UI path marker for compatibility; D4 now scans the full DOM.
+          automatic_scan: 'persistent_discovery_visible_high_confidence',
           capture_scope: 'full_page',
+          discovery_scope: 'full_dom',
           discovery_count: discovery.count
         }
       }
