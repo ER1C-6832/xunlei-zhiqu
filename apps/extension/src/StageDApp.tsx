@@ -30,9 +30,11 @@ import {
   recommendationForItem,
   type PresentedResourceGroup
 } from './resourcePresentation';
-import { AUTO_DISCOVERY_STORAGE_KEY } from './persistentDiscovery';
 
 const RUNTIME_URL = 'http://127.0.0.1:8765';
+// Keep this duplicated intentionally: side-panel entry must not import content-script modules,
+// otherwise Rollup can extract a shared ESM chunk that MV3 content_scripts cannot execute.
+const AUTO_DISCOVERY_STORAGE_KEY = 'zhiqu_auto_discovery_enabled';
 
 type Status = 'idle' | 'selecting' | 'scanning' | 'analyzing' | 'creating' | 'favoriting' | 'error';
 type CaptureMode = 'automatic' | 'rectangle';
@@ -488,26 +490,25 @@ function DiscoveryControl({ state, updating, disabled, onToggle }: {
   disabled: boolean;
   onToggle: () => void;
 }) {
-  const detail = state.enabled
-    ? state.count > 0
-      ? `已发现 ${state.count} 项 · 只在本地，不会自动分析`
-      : '已开启 · 只在本地监听页面变化'
-    : '关闭时不会在后台扫描页面';
-
   return (
     <section className="zhiqu-discovery-control">
       <div>
         <strong>页面自动发现</strong>
-        <span>{detail}</span>
+        <span>
+          {state.enabled
+            ? state.count > 0
+              ? `已发现 ${state.count} 项 · 只在本地，不会自动分析`
+              : '已开启 · 只在本地监听页面变化'
+            : '关闭时不会在后台扫描页面'}
+        </span>
       </div>
       <button
-        className={`zhiqu-switch ${state.enabled ? 'active' : ''}`}
         type="button"
-        role="switch"
-        aria-checked={state.enabled}
-        aria-label="页面自动发现"
-        onClick={onToggle}
+        className={`zhiqu-switch ${state.enabled ? 'active' : ''}`}
+        aria-pressed={state.enabled}
+        aria-label={state.enabled ? '关闭页面自动发现' : '开启页面自动发现'}
         disabled={disabled || updating}
+        onClick={onToggle}
       >
         <span />
       </button>
@@ -602,43 +603,50 @@ function ResourceChoice({ item, checked, recommendation, emphasized = false, onT
 
 function statusCopy(status: Status) {
   if (status === 'selecting') {
-    return { title: '在网页上框选资源区域', description: '拖拽覆盖你关心的下载项。完成后只收集资源，不会自动使用智能分析。' };
+    return { title: '在网页上框选资源区域', description: '拖拽覆盖你关心的下载项，松开后只做本地查找。' };
   }
   if (status === 'scanning') {
-    return { title: '正在查找可下载资源', description: '只在本地扫描当前页面，不会调用模型。' };
+    return { title: '正在查找可下载资源', description: '只在本地查看当前页面，不会使用智能分析。' };
   }
   if (status === 'error') {
     return { title: '当前页面的下载资源', description: '可以重新智能整理，或框选一个更明确的区域。' };
   }
-  return { title: '当前页面的下载资源', description: '让迅雷智取帮你整理复杂的版本、格式和附件。' };
+  return { title: '当前页面的下载资源', description: '先在本地查找资源，需要推荐时再进行智能分析。' };
 }
 
 function captureSummary(batch: CaptureBatch): string {
-  const counts = { file: 0, media: 0, magnet: 0, other: 0 };
-  for (const candidate of batch.candidates) {
-    if (candidate.candidate_type === 'file' || candidate.candidate_type === 'image') counts.file += 1;
-    else if (candidate.candidate_type === 'media') counts.media += 1;
-    else if (candidate.candidate_type === 'magnet') counts.magnet += 1;
-    else counts.other += 1;
-  }
-  const parts: string[] = [];
-  if (counts.file) parts.push(`文件 ${counts.file}`);
-  if (counts.media) parts.push(`媒体 ${counts.media}`);
-  if (counts.magnet) parts.push(`Magnet ${counts.magnet}`);
-  if (counts.other) parts.push(`其他 ${counts.other}`);
-  return parts.join(' · ') || `${batch.candidates.length} 项资源`;
+  const counts = batch.candidates.reduce<Record<string, number>>((acc, candidate) => {
+    const key = candidate.candidate_type;
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const labels: Array<[string, string]> = [
+    ['file', '文件'],
+    ['media', '媒体'],
+    ['magnet', 'Magnet'],
+    ['image', '图片'],
+    ['page', '页面'],
+    ['unknown', '其他']
+  ];
+  return labels
+    .filter(([key]) => counts[key])
+    .map(([key, label]) => `${label} ${counts[key]}`)
+    .join(' · ');
 }
 
 function readDiscoveryState(value: unknown): DiscoveryState {
-  if (!value || typeof value !== 'object') return EMPTY_DISCOVERY;
-  const item = value as Partial<DiscoveryState>;
+  const input = value as Partial<DiscoveryState> | null;
   return {
-    enabled: item.enabled === true,
-    count: typeof item.count === 'number' ? item.count : 0,
-    fileCount: typeof item.fileCount === 'number' ? item.fileCount : 0,
-    mediaCount: typeof item.mediaCount === 'number' ? item.mediaCount : 0,
-    magnetCount: typeof item.magnetCount === 'number' ? item.magnetCount : 0
+    enabled: input?.enabled === true,
+    count: safeNumber(input?.count),
+    fileCount: safeNumber(input?.fileCount),
+    mediaCount: safeNumber(input?.mediaCount),
+    magnetCount: safeNumber(input?.magnetCount)
   };
+}
+
+function safeNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 async function requestRectangleSelection(tabId: number) {
@@ -700,7 +708,7 @@ async function runtimeError(response: Response, fallback: string): Promise<strin
 
 function humanizeError(value: string): string {
   return value
-    .replaceAll('节点 A', '智能分析')
+    .replaceAll('节点 A', '智能整理')
     .replaceAll('ResourcePlan', '整理结果')
     .replaceAll('EvidencePack', '资源信息')
     .replaceAll('candidate_id', '资源标识')
