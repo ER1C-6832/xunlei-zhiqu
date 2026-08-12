@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     model_connect_timeout_seconds: float = 10.0
     model_read_timeout_seconds: float = 120.0
     model_write_timeout_seconds: float = 30.0
+    model_max_completion_tokens: int = 8192
     runtime_host: str = "127.0.0.1"
     runtime_port: int = 8765
     log_level: str = "INFO"
