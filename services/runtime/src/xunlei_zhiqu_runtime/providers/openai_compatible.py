@@ -25,17 +25,18 @@ SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型�
 4. ResourcePlan 是 AI 分析与推荐，不代表用户最终决定；措辞必须允许用户修改。
 5. candidate_type=page 不是自动排除理由。只有证据显示它是导航、无关入口或不适合作为资源时才可在语义层标为 excluded/unknown。
 6. 对专业文件名和技术缩写给出普通用户能理解的解释；比较版本、平台、架构、包类型、媒体规格和附件关系时说明证据来源。
-7. 存在合理分歧或证据不足时放入 uncertainties，不要硬猜。
-8. recommendations 必须是场景化建议，例如当前设备兼容、质量优先、体积优先或手动选择，并引用已有 item_id。
-9. 尽量覆盖 EvidencePack 中所有有意义候选。用途和证据完全相同的附件可在一个 PlanItem 中引用多个 candidate_id；不得因为文件名相似就把不同候选当成同一资源。
-10. 输出要通俗且紧凑，避免对重复的签名、SBOM、校验附件逐项复述相同长文。
-11. 必须只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏或 JSON 之外的解释文字。
-12. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时必须输出 {}，绝不能输出 null、[]、字符串或其他类型。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
+7. technical_metadata.resource_family_hint 只是扩展名 Registry 给出的本地提示，不是最终语义。resource_family_ambiguous=true 时尤其必须结合文件名、页面上下文、MIME 和其他技术元数据判断，不可只凭扩展名下结论。
+8. 存在合理分歧或证据不足时放入 uncertainties，不要硬猜。
+9. recommendations 必须是场景化建议，例如当前设备兼容、质量优先、体积优先或手动选择，并引用已有 item_id。
+10. 尽量覆盖 EvidencePack 中所有有意义候选。用途和证据完全相同的附件可在一个 PlanItem 中引用多个 candidate_id；不得因为文件名相似就把不同候选当成同一资源。
+11. 输出要通俗且紧凑，避免对重复的签名、SBOM、校验附件逐项复述相同长文。
+12. 必须只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏或 JSON 之外的解释文字。
+13. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时必须输出 {}，绝不能输出 null、[]、字符串或其他类型。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
 
 输出单个 JSON 对象，只包含输出契约要求的业务字段。"""
 
 OUTPUT_CONTRACT = {
-    "resource_type": "software|video|audio|image|archive|mixed|unknown",
+    "resource_type": "software|document|video|audio|image|subtitle|model|design|archive|disk_image|mixed|unknown",
     "resource_title": "string",
     "overview": "string",
     "selected": "PlanItem[]",
