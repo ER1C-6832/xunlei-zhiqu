@@ -9,7 +9,7 @@
 - **Stage A：已完成** — Monorepo、三端可运行骨架、环境变量与 ModelProviderAdapter。
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
 - **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实 OpenAI-compatible 节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
-- **Stage D：进行中** — D1 已完成普通用户界面去工程化；D2 已加入用户可控的常驻本地资源发现、页面变化监听和网页资源数量浮标。主动扫描与框选只做本地候选采集，必须由用户再次点击“智能分析”才调用 LLM。
+- **Stage D：进行中** — D1 已完成普通用户界面去工程化；D2 已完成用户可控的常驻本地高置信资源发现、页面变化监听和网页资源数量浮标；D3 已加入“当前视口 / 框选区域 / 自动发现 / 整个网页”四条独立本地候选路径，并支持分析后直接定位真实网页中的推荐资源。所有候选路径都必须由用户再次点击“智能分析”才调用 LLM。
 - **Stage E：下一大阶段** — Stage D 完成后接入真实 Download Engine、真实进度和轻量质检。
 
 ## 当前已实现
@@ -20,10 +20,14 @@
 - 真实矩形框选 SelectionScope；
 - DOM href、选区纯文本 URL / Magnet、`video/audio/source` 基础采集；
 - 完全重复 URL / BTIH 合并与 capture provenance；
-- 主动“智能整理”和框选均先在本地采集候选，不自动调用模型；
-- 用户明确点击“智能分析”后才执行 `CaptureBatch` → Runtime → 真实节点 A → `ResourcePlan`；
-- D2 页面自动发现默认关闭；用户开启后使用 MutationObserver、滚动/视口变化做轻量本地资源计数，不构造 EvidencePack、不调用 LLM；
-- D2 在真实网页左下角显示圆形资源浮标与数量角标，点击只打开 Side Panel；
+- “智能整理”只扫描当前可见区域并形成可折叠候选，不自动调用模型；
+- “框选页面区域”形成独立候选路径，不自动调用模型；
+- D2 页面自动发现默认关闭；用户开启后使用 MutationObserver、滚动/视口变化做轻量本地高置信资源计数和候选列表，不构造 EvidencePack、不调用 LLM；
+- D2 在真实网页左下角显示飞鸟资源浮标与数量角标，点击只打开 Side Panel；
+- D3 “整理整个网页”扫描完整 DOM 中的明显资源，适合版本很多、需要长距离滚动的下载页，并补充页面标题层级作为可选 LLM 上下文；
+- 四条候选路径都允许用户先查看本地候选，再明确点击“智能分析”执行 `CaptureBatch` → Runtime → 真实节点 A → `ResourcePlan`；
+- 候选列表优先展示网页上的人类可读名称、章节/版本标题、文件名和格式，并可点击定位真实网页资源；
+- 节点 A 完成后可一键“定位推荐下载”，滚动到真实网页中的推荐资源；
 - 用户修改推荐后以 `confirmed_item_ids` 创建 ResourceJob；
 - 本地 / 云盘交付目标；
 - ResourcePlan 可收藏到链接库；
@@ -55,12 +59,12 @@
 
 ## Stage D 当前边界
 
-D1 与 D2 已完成当前 Demo 所需的用户界面简化和本地常驻发现。以下仍属于后续 D3-D6，不应误认为已完成：
+D1-D3 已完成当前 Demo 所需的用户界面简化、本地常驻发现、可查看候选、多路径候选选择、整页长页面扫描与推荐资源定位。以下仍属于后续 D4-D6，不应误认为已完成：
 
 - 完整资源扩展名 Registry 与 ResourceType 扩展；
-- 更强的全 DOM 资源发现与自动复杂度触发；
 - Network Media Capture、M3U8 / DASH；
 - `<img>` / `srcset` / `picture` / CSS background-image 与批量图片；
+- 更强的动态页面 / iframe / blob 资源发现；
 - EvidenceReducer / EvidenceCompiler；
 - Token / latency / usage 日志与轻量 ResourcePlan 缓存。
 
