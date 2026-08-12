@@ -27,12 +27,14 @@ export function mergeNetworkMediaIntoBatch(
 ): CaptureBatch {
   if (!records.length) return batch;
 
-  const candidates = batch.candidates.map((candidate) => ({
+  const candidates: CapturedResourceCandidate[] = batch.candidates.map((candidate) => ({
     ...candidate,
     metadata: { ...(candidate.metadata || {}) },
     probe_facts: candidate.probe_facts ? { ...candidate.probe_facts } : candidate.probe_facts
   }));
-  const byValue = new Map(candidates.map((candidate) => [candidate.value, candidate]));
+  const byValue = new Map<string, CapturedResourceCandidate>(
+    candidates.map((candidate) => [candidate.value, candidate])
+  );
   let appended = 0;
 
   for (const record of records) {
