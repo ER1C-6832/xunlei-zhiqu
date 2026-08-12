@@ -4,7 +4,20 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-ResourceType = Literal["software", "video", "audio", "image", "archive", "mixed", "unknown"]
+ResourceType = Literal[
+    "software",
+    "document",
+    "video",
+    "audio",
+    "image",
+    "subtitle",
+    "model",
+    "design",
+    "archive",
+    "disk_image",
+    "mixed",
+    "unknown",
+]
 DeliveryTarget = Literal["local", "cloud"]
 
 
