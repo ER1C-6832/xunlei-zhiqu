@@ -43,7 +43,7 @@ const REGISTRY: readonly RegistryEntry[] = [
     candidateType: 'media',
     extensions: [
       '3g2', '3gp', 'asf', 'asx', 'avi', 'av1', 'dat', 'divx', 'dv', 'f4v', 'flv',
-      'm2t', 'm2ts', 'm3u8', 'm4v', 'mkv', 'mov', 'mp4', 'mpe', 'mpeg', 'mpg',
+      'm2t', 'm2ts', 'm3u8', 'mpd', 'm4v', 'mkv', 'mov', 'mp4', 'mpe', 'mpeg', 'mpg',
       'qt', 'rm', 'rmvb', 'swf', 'tp', 'ts', 'vob', 'webm', 'wmv', 'xv', 'xvx'
     ]
   },
