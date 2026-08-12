@@ -12,16 +12,17 @@ export type NetworkMediaRecord = {
 
 const STORAGE_PREFIX = 'zhiqu_network_media_tab_';
 const MAX_PER_TAB = 120;
-const MEDIA_URL_PATTERN = /\.(?:3g2|3gp|aac|aiff|amr|ape|asf|avi|av1|divx|f4v|flac|flv|m2t|m2ts|m4a|m4v|mid|mka|mkv|mov|mp3|mp4|mpe|mpeg|mpg|mpga|ogg|opus|qt|ra|rm|rmvb|ts|vob|wav|webm|wma)(?:[?#]|$)/i;
+const MEDIA_URL_PATTERN = /\.(?:3g2|3gp|aac|aiff|amr|ape|asf|avi|av1|divx|f4v|flac|flv|m2t|m2ts|m4a|m4v|mid|mka|mkv|mov|mp3|mp4|mpe|mpeg|mpg|mpga|ogg|opus|qt|ra|rm|rmvb|vob|wav|webm|wma)(?:[?#]|$)/i;
 const HLS_PATTERN = /\.m3u8(?:[?#]|$)/i;
 const DASH_PATTERN = /\.mpd(?:[?#]|$)/i;
+const HLS_SEGMENT_PATTERN = /\.ts(?:[?#]|$)/i;
 
 export function registerNetworkMediaCapture(): void {
   chrome.webRequest.onHeadersReceived.addListener(
     (details) => {
       if (details.tabId < 0 || !/^https?:/i.test(details.url)) return;
       const headers = readHeaders(details.responseHeaders || []);
-      const kind = classifyNetworkMedia(details.url, headers.contentType);
+      const kind = classifyNetworkMedia(details.url, headers.contentType, details.type);
       if (!kind) return;
 
       const record: NetworkMediaRecord = {
@@ -85,9 +86,15 @@ async function readRecords(tabId: number): Promise<NetworkMediaRecord[]> {
   return value.filter(isRecord).slice(0, MAX_PER_TAB);
 }
 
-function classifyNetworkMedia(url: string, mimeType: string | null): NetworkMediaKind | null {
+function classifyNetworkMedia(
+  url: string,
+  mimeType: string | null,
+  requestType: chrome.webRequest.ResourceType
+): NetworkMediaKind | null {
   if (HLS_PATTERN.test(url) || isHlsMime(mimeType)) return 'hls_manifest';
   if (DASH_PATTERN.test(url) || isDashMime(mimeType)) return 'dash_manifest';
+  if (HLS_SEGMENT_PATTERN.test(url) && requestType !== 'media') return null;
+  if (mimeType && /video\/mp2t/i.test(mimeType) && requestType !== 'media') return null;
   if (MEDIA_URL_PATTERN.test(url) || isMediaMime(mimeType)) return 'media_file';
   return null;
 }
