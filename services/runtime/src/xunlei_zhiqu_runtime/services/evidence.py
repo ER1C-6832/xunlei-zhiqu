@@ -13,6 +13,18 @@ _SAFE_METADATA_KEYS = {
     "duration_seconds",
     "video_width",
     "video_height",
+    "dynamic_media_signal",
+    "directly_downloadable",
+    "network_observed",
+    "content_disposition",
+    "request_type",
+    "image_source",
+    "natural_width",
+    "natural_height",
+    "rendered_width",
+    "rendered_height",
+    "srcset_descriptor",
+    "possible_original",
     "download_attribute",
     "rel",
     "target",
@@ -99,7 +111,7 @@ def _extension(filename: str | None, metadata: dict[str, Any]) -> str | None:
     if not filename or "." not in filename:
         return None
     suffix = filename.rsplit(".", 1)[-1].lower()
-    return suffix if 1 <= len(suffix) <= 16 and suffix.isalnum() else None
+    return suffix if 1 <= len(suffix) <= 10 and suffix.isalnum() else None
 
 
 def _provenance(channel: str, metadata: dict[str, Any]) -> list[dict[str, str | None]]:
