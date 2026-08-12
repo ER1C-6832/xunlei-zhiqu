@@ -1,3 +1,5 @@
+import { registerNetworkMediaCapture } from './networkMediaCapture';
+
 function configureSidePanel(): void {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 }
@@ -16,3 +18,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
   return true;
 });
+
+registerNetworkMediaCapture();
