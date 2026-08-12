@@ -49,43 +49,183 @@
 
 .zhiqu-capture-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
   gap: 8px;
 }
 
 .zhiqu-capture-actions .zhiqu-primary,
 .zhiqu-capture-actions .zhiqu-secondary { width: 100%; }
 
-.zhiqu-discovery-control {
-  min-height: 62px;
+.zhiqu-capture-secondary-actions,
+.zhiqu-reselect-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.zhiqu-reselect-actions { margin-top: 12px; }
+.zhiqu-reselect-actions .zhiqu-reselect { margin-top: 0; }
+
+.zhiqu-local-resources {
+  overflow: hidden;
+  border: 1px solid #e4e9f0;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.zhiqu-local-resources-toggle {
+  width: 100%;
+  min-height: 45px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 0;
+  color: #344256;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zhiqu-local-resources-toggle:hover { background: #f8fbff; }
+.zhiqu-local-resources-toggle strong { font-size: 13px; }
+.zhiqu-local-resources-toggle b {
+  min-width: 28px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #3f6ea7;
+  background: #eef3f8;
+  font-size: 11px;
+  text-align: center;
+}
+
+.zhiqu-local-resource-list {
+  max-height: 300px;
+  overflow-y: auto;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border-top: 1px solid #edf0f4;
+  background: #fafbfd;
+}
+
+.zhiqu-local-resource-row {
+  width: 100%;
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 11px 13px;
-  border-radius: 13px;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #253247;
+  background: #fff;
+  text-align: left;
 }
 
-.zhiqu-discovery-control > div {
+button.zhiqu-local-resource-row { cursor: pointer; }
+button.zhiqu-local-resource-row:hover { border-color: #bcd4f4; background: #f5f9ff; }
+.zhiqu-local-resource-row.static { cursor: default; }
+
+.zhiqu-local-resource-main {
   min-width: 0;
   display: grid;
   gap: 3px;
 }
 
-.zhiqu-discovery-control strong {
+.zhiqu-local-resource-main strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zhiqu-local-resource-main small {
+  overflow: hidden;
+  color: #7a8697;
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zhiqu-local-resource-row em {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #416d9f;
+  background: #eef3f8;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.zhiqu-discovery-control {
+  display: grid;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: 13px;
+}
+
+.zhiqu-discovery-head {
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.zhiqu-discovery-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.zhiqu-discovery-head strong {
   color: #29384d;
   font-size: 13px;
   line-height: 1.35;
 }
 
-.zhiqu-discovery-control span {
-  overflow: hidden;
+.zhiqu-discovery-head span {
   color: #7b8797;
   font-size: 11px;
   line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+
+.zhiqu-discovery-body {
+  display: grid;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid #edf0f4;
+}
+
+.zhiqu-discovery-body .zhiqu-local-resources-toggle {
+  border: 1px solid #e4e9f0;
+  border-radius: 10px;
+}
+
+.zhiqu-local-resource-list.discovery {
+  border: 1px solid #e4e9f0;
+  border-radius: 10px;
+}
+
+.zhiqu-discovery-use {
+  min-height: 40px;
+  border: 1px solid #c8daf1;
+  border-radius: 9px;
+  color: #176bd3;
+  background: #f4f8ff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.zhiqu-discovery-use:hover { background: #eaf3ff; }
+.zhiqu-discovery-use:disabled { opacity: .5; cursor: default; }
 
 .zhiqu-switch {
   position: relative;
@@ -118,8 +258,9 @@
 
 @media (max-width: 390px) {
   .zhiqu-capture-card { padding: 14px; }
-  .zhiqu-capture-actions { grid-template-columns: 1fr; }
-  .zhiqu-discovery-control span { white-space: normal; }
+  .zhiqu-capture-secondary-actions,
+  .zhiqu-reselect-actions { grid-template-columns: 1fr; }
+  .zhiqu-discovery-head span { white-space: normal; }
 }
 
 @media (prefers-reduced-motion: reduce) {
