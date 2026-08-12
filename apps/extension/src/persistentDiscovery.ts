@@ -1,9 +1,21 @@
+type DiscoveryKind = 'file' | 'media' | 'magnet' | 'entry';
+
+type PersistentDiscoveryItem = {
+  value: string;
+  kind: DiscoveryKind;
+  label: string;
+  host: string | null;
+  extension: string | null;
+};
+
 type PersistentDiscoveryState = {
   enabled: boolean;
   count: number;
   fileCount: number;
   mediaCount: number;
   magnetCount: number;
+  entryCount: number;
+  items: PersistentDiscoveryItem[];
 };
 
 export const AUTO_DISCOVERY_STORAGE_KEY = 'zhiqu_auto_discovery_enabled';
@@ -15,13 +27,7 @@ const MEDIA_PATTERN = /\.(mp4|m3u8|mkv|webm|avi|mov|mp3|flac|aac|wav|ogg)(?:[?#]
 const IMAGE_PATTERN = /\.(png|jpe?g|gif|webp|svg|bmp)(?:[?#]|$)/i;
 const OBVIOUS_TEXT = /(?:download|installer|install|source|tarball|archive|package|下载|安装|源码|压缩包|磁力|magnet)/i;
 
-let state: PersistentDiscoveryState = {
-  enabled: false,
-  count: 0,
-  fileCount: 0,
-  mediaCount: 0,
-  magnetCount: 0
-};
+let state: PersistentDiscoveryState = emptyState(false);
 let observer: MutationObserver | null = null;
 let scanTimer: number | null = null;
 
@@ -52,7 +58,10 @@ export function applyPersistentDiscoveryEnabled(enabled: boolean): PersistentDis
 }
 
 export function getPersistentDiscoveryState(): PersistentDiscoveryState {
-  return { ...state };
+  return {
+    ...state,
+    items: state.items.map((item) => ({ ...item }))
+  };
 }
 
 export function refreshPersistentDiscovery(): PersistentDiscoveryState {
@@ -97,7 +106,7 @@ function stopPersistentDiscovery(): void {
   window.removeEventListener('resize', onViewportChanged);
   document.removeEventListener('visibilitychange', onVisibilityChanged);
   document.getElementById(BADGE_ID)?.remove();
-  state = { enabled: false, count: 0, fileCount: 0, mediaCount: 0, magnetCount: 0 };
+  state = emptyState(false);
   notifyDiscoveryUpdate();
 }
 
@@ -120,16 +129,27 @@ function scheduleDiscovery(delay: number): void {
 
 function discoverVisibleResources(): Omit<PersistentDiscoveryState, 'enabled'> {
   const identities = new Set<string>();
+  const items: PersistentDiscoveryItem[] = [];
   let fileCount = 0;
   let mediaCount = 0;
   let magnetCount = 0;
+  let entryCount = 0;
 
-  const register = (value: string, kind: 'file' | 'media' | 'magnet') => {
-    if (identities.has(value)) return;
-    identities.add(value);
+  const register = (value: string, kind: DiscoveryKind, label?: string | null) => {
+    const identity = kind === 'magnet' ? normalizeMagnet(value) : value;
+    if (identities.has(identity) || identities.size >= 99) return;
+    identities.add(identity);
     if (kind === 'file') fileCount += 1;
     else if (kind === 'media') mediaCount += 1;
-    else magnetCount += 1;
+    else if (kind === 'magnet') magnetCount += 1;
+    else entryCount += 1;
+    items.push({
+      value,
+      kind,
+      label: cleanLabel(label) || filenameFromValue(value) || defaultLabel(kind),
+      host: hostFromValue(value),
+      extension: extensionFromValue(value)
+    });
   };
 
   for (const anchor of document.querySelectorAll<HTMLAnchorElement>('a[href]')) {
@@ -137,13 +157,15 @@ function discoverVisibleResources(): Omit<PersistentDiscoveryState, 'enabled'> {
     const raw = anchor.getAttribute('href');
     const resolved = resolveValue(raw);
     if (!resolved) continue;
+    const label = anchor.getAttribute('download') || anchor.textContent || anchor.getAttribute('aria-label');
     if (resolved.startsWith('magnet:')) {
-      register(normalizeMagnet(resolved), 'magnet');
+      register(resolved, 'magnet', label);
       continue;
     }
     const evidence = `${anchor.textContent || ''} ${anchor.getAttribute('download') || ''} ${anchor.getAttribute('aria-label') || ''}`;
-    if (MEDIA_PATTERN.test(resolved)) register(resolved, 'media');
-    else if (FILE_PATTERN.test(resolved) || IMAGE_PATTERN.test(resolved) || anchor.hasAttribute('download') || OBVIOUS_TEXT.test(evidence)) register(resolved, 'file');
+    if (MEDIA_PATTERN.test(resolved)) register(resolved, 'media', label);
+    else if (FILE_PATTERN.test(resolved) || IMAGE_PATTERN.test(resolved) || anchor.hasAttribute('download')) register(resolved, 'file', label);
+    else if (OBVIOUS_TEXT.test(evidence)) register(resolved, 'entry', label);
   }
 
   for (const media of document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video, audio')) {
@@ -158,7 +180,7 @@ function discoverVisibleResources(): Omit<PersistentDiscoveryState, 'enabled'> {
     }
     for (const value of values) {
       const resolved = resolveValue(value);
-      if (resolved) register(resolved, 'media');
+      if (resolved) register(resolved, 'media', media.getAttribute('title') || media.getAttribute('aria-label'));
     }
   }
 
@@ -166,7 +188,9 @@ function discoverVisibleResources(): Omit<PersistentDiscoveryState, 'enabled'> {
     count: identities.size,
     fileCount,
     mediaCount,
-    magnetCount
+    magnetCount,
+    entryCount,
+    items
   };
 }
 
@@ -195,6 +219,50 @@ function normalizeMagnet(value: string): string {
   return match?.[1] ? `magnet:btih:${decodeURIComponent(match[1]).toLowerCase()}` : value;
 }
 
+function cleanLabel(value: string | null | undefined): string | null {
+  const cleaned = value?.replace(/\s+/g, ' ').trim();
+  return cleaned ? cleaned.slice(0, 120) : null;
+}
+
+function filenameFromValue(value: string): string | null {
+  if (value.startsWith('magnet:')) {
+    const name = value.match(/[?&]dn=([^&]+)/i)?.[1];
+    if (!name) return null;
+    try {
+      return decodeURIComponent(name.replace(/\+/g, ' '));
+    } catch {
+      return name;
+    }
+  }
+  try {
+    const filename = new URL(value).pathname.split('/').filter(Boolean).pop();
+    return filename ? decodeURIComponent(filename) : null;
+  } catch {
+    return null;
+  }
+}
+
+function extensionFromValue(value: string): string | null {
+  const filename = filenameFromValue(value);
+  return filename?.match(/\.([a-z0-9]{1,10})$/i)?.[1]?.toLowerCase() || null;
+}
+
+function hostFromValue(value: string): string | null {
+  if (value.startsWith('magnet:')) return null;
+  try {
+    return new URL(value).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultLabel(kind: DiscoveryKind): string {
+  if (kind === 'media') return '媒体资源';
+  if (kind === 'magnet') return 'Magnet 资源';
+  if (kind === 'entry') return '下载入口';
+  return '文件资源';
+}
+
 function renderDiscoveryBadge(count: number): void {
   if (!state.enabled || count <= 0) {
     document.getElementById(BADGE_ID)?.remove();
@@ -213,8 +281,8 @@ function renderDiscoveryBadge(count: number): void {
       left: '20px',
       bottom: '24px',
       zIndex: '2147483645',
-      width: '46px',
-      height: '46px',
+      width: '48px',
+      height: '48px',
       display: 'grid',
       placeItems: 'center',
       padding: '0',
@@ -223,13 +291,10 @@ function renderDiscoveryBadge(count: number): void {
       color: '#fff',
       background: '#1677ff',
       boxShadow: '0 8px 24px rgba(22,119,255,.32)',
-      cursor: 'pointer',
-      font: '700 15px/1 Microsoft YaHei UI, system-ui, sans-serif'
+      cursor: 'pointer'
     });
 
-    const mark = document.createElement('span');
-    mark.textContent = '智';
-    mark.setAttribute('aria-hidden', 'true');
+    const mark = createBirdMark();
     const countBadge = document.createElement('span');
     countBadge.id = COUNT_ID;
     Object.assign(countBadge.style, {
@@ -263,9 +328,44 @@ function renderDiscoveryBadge(count: number): void {
   button.setAttribute('aria-label', `迅雷智取发现 ${count} 项可下载资源，点击打开`);
 }
 
+function createBirdMark(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '27');
+  svg.setAttribute('height', '27');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.style.pointerEvents = 'none';
+
+  const body = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  body.setAttribute('d', 'M4 15.2c3.4-.5 6.7-3.2 8.8-8.1.7 2.7 2.7 4.5 6.4 5-1.8 1.7-3.9 2.6-6.1 2.7-2 2.7-4.5 4.1-8 4.4 1.8-1 3.1-2.3 3.9-4-1.9.5-3.5.5-5 0Z');
+  body.setAttribute('fill', 'currentColor');
+
+  const wing = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  wing.setAttribute('d', 'M10.2 13.2c1.8-.9 3.2-2.2 4.2-4 .5 1.4 1.5 2.4 3 3-2 .3-3.7 1-5.2 2.2');
+  wing.setAttribute('fill', 'none');
+  wing.setAttribute('stroke', '#dcebff');
+  wing.setAttribute('stroke-width', '1.25');
+  wing.setAttribute('stroke-linecap', 'round');
+
+  svg.append(body, wing);
+  return svg;
+}
+
 function notifyDiscoveryUpdate(): void {
   void chrome.runtime.sendMessage({
     type: 'XUNLEI_ZHIQU_DISCOVERY_UPDATE',
     state: getPersistentDiscoveryState()
   }).catch(() => undefined);
+}
+
+function emptyState(enabled: boolean): PersistentDiscoveryState {
+  return {
+    enabled,
+    count: 0,
+    fileCount: 0,
+    mediaCount: 0,
+    magnetCount: 0,
+    entryCount: 0,
+    items: []
+  };
 }
