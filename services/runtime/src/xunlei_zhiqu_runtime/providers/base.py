@@ -1,20 +1,15 @@
 from abc import ABC, abstractmethod
-from typing import Any
 
-from xunlei_zhiqu_runtime.models import CaptureBatch, ResourcePlan
+from xunlei_zhiqu_runtime.models import EvidencePack, ResourcePlan
 
 
 class ModelProviderAdapter(ABC):
-    """Only Runtime owns model credentials and provider-specific behavior."""
+    """Model providers only receive a Runtime-built, sanitized EvidencePack."""
 
     name: str
 
     @abstractmethod
-    async def analyze(
-        self,
-        batch: CaptureBatch,
-        evidence_pack: dict[str, Any],
-    ) -> ResourcePlan:
+    async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
         raise NotImplementedError
 
     async def aclose(self) -> None:
