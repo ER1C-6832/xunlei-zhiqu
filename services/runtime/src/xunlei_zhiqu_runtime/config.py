@@ -7,7 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "迅雷智取 Runtime"
-    model_provider: Literal["fixture", "openai_compatible"] = "fixture"
+    model_provider: Literal["fixture", "openai_compatible"] = "openai_compatible"
+    enable_fixture_provider: bool = False
     model_base_url: str = "https://api.openai.com/v1"
     model_name: str = "gpt-4.1-mini"
     model_api_key: SecretStr | None = None
