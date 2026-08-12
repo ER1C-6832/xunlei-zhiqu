@@ -22,6 +22,7 @@ from xunlei_zhiqu_runtime.models import (
 )
 from xunlei_zhiqu_runtime.providers.factory import create_provider
 from xunlei_zhiqu_runtime.services.analyzer import CaptureAnalyzer
+from xunlei_zhiqu_runtime.services.confirmation import compile_confirmed_request
 from xunlei_zhiqu_runtime.services.job_store import (
     create_favorite,
     create_job,
@@ -79,7 +80,10 @@ async def analyze_capture(batch: CaptureBatch, request: Request) -> ResourcePlan
 
 @app.post("/v1/jobs", response_model=ResourceJobSnapshot)
 async def create_resource_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
-    return create_job(payload)
+    try:
+        return create_job(compile_confirmed_request(payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/jobs/manual", response_model=ResourceJobSnapshot)
