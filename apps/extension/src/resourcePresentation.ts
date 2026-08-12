@@ -80,9 +80,14 @@ function isAttachment(item: PlanItem, text: string): boolean {
 }
 
 function looksLikeFormatChoice(plan: ResourcePlan, text: string): boolean {
-  if (plan.resource_type === 'video') return /(mp4|mkv|webm|mov|avi|h\.?264|h\.?265|hevc|av1|vp9)/i.test(text);
-  if (plan.resource_type === 'audio') return /(flac|mp3|aac|ape|wav|opus|m4a|ogg)/i.test(text);
-  if (plan.resource_type === 'image') return /(png|jpe?g|webp|gif|svg|tiff?|heic|raw)/i.test(text);
-  if (plan.resource_type === 'archive') return /(zip|7z|rar|tar|gz|xz)/i.test(text);
-  return /(pdf|epub|mobi|docx?|xlsx?|pptx?)/i.test(text);
+  if (plan.resource_type === 'video') return /(mp4|mkv|webm|mov|avi|m3u8|h\.?264|h\.?265|hevc|av1|vp9)/i.test(text);
+  if (plan.resource_type === 'audio') return /(flac|mp3|aac|ape|wav|opus|m4a|ogg|dsf|dff)/i.test(text);
+  if (plan.resource_type === 'image') return /(png|jpe?g|webp|gif|svg|tiff?|heic|raw|jxl)/i.test(text);
+  if (plan.resource_type === 'document') return /(pdf|epub|mobi|azw3?|docx?|xlsx?|pptx?|odt|ods|odp|md|txt)/i.test(text);
+  if (plan.resource_type === 'subtitle') return /(srt|vtt|ass|ssa|sub|ttml|dfxp|sbv)/i.test(text);
+  if (plan.resource_type === 'model') return /(gguf|safetensors|onnx|ckpt|\.pt\b|\.pth\b|quant|量化|fp16|int8|q[2-8])/i.test(text);
+  if (plan.resource_type === 'design') return /(psd|\.ai\b|cdr|dwg|dxf|eps|stl)/i.test(text);
+  if (plan.resource_type === 'archive') return /(zip|7z|rar|tar|gz|xz|bz2|tgz)/i.test(text);
+  if (plan.resource_type === 'disk_image') return /(iso|img|wim|esd|vmdk|qcow2|vdi|gho)/i.test(text);
+  return false;
 }
