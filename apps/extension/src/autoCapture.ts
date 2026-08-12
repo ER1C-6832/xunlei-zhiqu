@@ -1,5 +1,6 @@
 import type { CaptureBatch, DomRect } from '@xunlei-zhiqu/contracts';
 import { buildCaptureBatchFromRect } from './capture';
+import { isKnownResourceExtension } from './resourceExtensions';
 
 const OBVIOUS_TEXT = /(?:download|installer|install|source|tarball|archive|package|binary|binaries|rpm|debian|dmg|msi|jdk|jre|下载|安装|源码|压缩包|磁力|magnet)/i;
 
@@ -67,7 +68,8 @@ export function buildFullPageCaptureBatch(tabId?: number): CaptureBatch {
 }
 
 function isObviousCandidate(candidate: CaptureBatch['candidates'][number]): boolean {
-  if (['file', 'media', 'magnet', 'image'].includes(candidate.candidate_type)) return true;
+  if (['media', 'magnet'].includes(candidate.candidate_type)) return true;
+  if (isKnownResourceExtension(candidate.value)) return true;
   if (typeof candidate.metadata?.download_attribute === 'string' && candidate.metadata.download_attribute) return true;
   const evidence = [
     candidate.display_name,
