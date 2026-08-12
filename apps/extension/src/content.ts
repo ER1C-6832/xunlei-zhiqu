@@ -1,5 +1,6 @@
 import type { DomRect } from '@xunlei-zhiqu/contracts';
 import { buildCaptureBatchFromRect } from './capture';
+import { enrichFusedCandidateMetadata } from './captureEnrichment';
 
 type CaptureResponse =
   | { ok: true; batch: ReturnType<typeof buildCaptureBatchFromRect> }
@@ -119,7 +120,7 @@ function startRectangleSelection(
     overlay.style.display = 'none';
     requestAnimationFrame(() => {
       try {
-        const batch = buildCaptureBatchFromRect(rect, tabId);
+        const batch = enrichFusedCandidateMetadata(buildCaptureBatchFromRect(rect, tabId));
         if (!batch.candidates.length) finish({ ok: false, error: '框选区域内没有发现候选资源' });
         else finish({ ok: true, batch });
       } catch (error) {
