@@ -14,7 +14,7 @@ from xunlei_zhiqu_runtime.providers.base import (
 )
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型节点。
 
