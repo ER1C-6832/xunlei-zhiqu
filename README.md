@@ -9,7 +9,7 @@
 - **Stage A：已完成** — Monorepo、三端可运行骨架、环境变量与 ModelProviderAdapter。
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
 - **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实 OpenAI-compatible 节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
-- **Stage D：进行中** — D1 已完成普通用户界面去工程化；D2 已完成用户可控的常驻本地高置信资源发现、页面变化监听和网页资源数量浮标；D3 已加入“当前视口 / 框选区域 / 自动发现 / 整个网页”四条独立本地候选路径，并支持分析后直接定位真实网页中的推荐资源。所有候选路径都必须由用户再次点击“智能分析”才调用 LLM。
+- **Stage D：进行中** — D1 已完成普通用户界面去工程化；D2 已完成用户可控的常驻本地高置信资源发现、页面变化监听和网页飞鸟资源浮标；D3 已完成独立资源扩展名 Registry 与最小 ResourceType 扩展。此前加入的“当前视口 / 框选区域 / 自动发现 / 整个网页”多候选路径和推荐资源定位作为体验增强继续保留。所有候选路径都必须由用户再次点击“智能分析”才调用 LLM。
 - **Stage E：下一大阶段** — Stage D 完成后接入真实 Download Engine、真实进度和轻量质检。
 
 ## 当前已实现
@@ -24,10 +24,13 @@
 - “框选页面区域”形成独立候选路径，不自动调用模型；
 - D2 页面自动发现默认关闭；用户开启后使用 MutationObserver、滚动/视口变化做轻量本地高置信资源计数和候选列表，不构造 EvidencePack、不调用 LLM；
 - D2 在真实网页左下角显示飞鸟资源浮标与数量角标，点击只打开 Side Panel；
-- D3 “整理整个网页”扫描完整 DOM 中的明显资源，适合版本很多、需要长距离滚动的下载页，并补充页面标题层级作为可选 LLM 上下文；
-- 四条候选路径都允许用户先查看本地候选，再明确点击“智能分析”执行 `CaptureBatch` → Runtime → 真实节点 A → `ResourcePlan`；
+- 长页面可使用“整理整个网页”扫描完整 DOM 中的明显资源，并补充页面标题层级作为可选 LLM 上下文；
+- 当前视口、框选、自动发现、整个网页四条候选路径都允许用户先查看本地候选，再明确点击“智能分析”执行 `CaptureBatch` → Runtime → 真实节点 A → `ResourcePlan`；
 - 候选列表优先展示网页上的人类可读名称、章节/版本标题、文件名和格式，并可点击定位真实网页资源；
 - 节点 A 完成后可一键“定位推荐下载”，滚动到真实网页中的推荐资源；
+- D3 新增 `resourceExtensions.ts`，统一维护主要文档/电子书、字幕、视频、音频、图片、设计/CAD、模型、压缩包、磁盘镜像和安装包扩展名；大小写匹配不敏感；
+- D3 Registry 同时供框选捕获、主动扫描和 D2 常驻发现使用，不再让三条路径维护不同的扩展名正则；
+- `.bin` / `.dds` / `.stl` / `.dat` / `.cbr` / `.cbz` 等存在语义歧义的扩展只提供本地 family hint，并带 `resource_family_ambiguous`，不能单凭扩展名决定最终资源语义；
 - 用户修改推荐后以 `confirmed_item_ids` 创建 ResourceJob；
 - 本地 / 云盘交付目标；
 - ResourcePlan 可收藏到链接库；
@@ -42,6 +45,8 @@
 - Sanitized EvidencePack，Provider 不直接接收完整 CaptureBatch；
 - `OpenAICompatibleProvider` + 显式开发 `FixtureProvider`；
 - DashScope / DeepSeek V4 JSON Mode 兼容；
+- D3 ResourceType 已扩展为 `software/document/video/audio/image/subtitle/model/design/archive/disk_image/mixed/unknown`；
+- EvidencePack 可接收 Extension Registry 的 `resource_family_hint`、歧义标记和候选类别提示；这些只是本地 hint，节点 A 仍需结合文件名、页面上下文、MIME 和技术元数据判断；
 - 模型只能引用已有 Candidate ID，返回后有确定性引用校验；
 - ResourceJob 创建、列表、暂停 / 恢复；
 - 链接库收藏 / 历史；
@@ -59,14 +64,12 @@
 
 ## Stage D 当前边界
 
-D1-D3 已完成当前 Demo 所需的用户界面简化、本地常驻发现、可查看候选、多路径候选选择、整页长页面扫描与推荐资源定位。以下仍属于后续 D4-D6，不应误认为已完成：
+D1-D3 已完成当前 Demo 所需的普通用户界面简化、本地常驻发现、多候选路径，以及资源扩展名 Registry / ResourceType 扩展。以下仍属于后续 D4-D6，不应误认为已完成：
 
-- 完整资源扩展名 Registry 与 ResourceType 扩展；
-- Network Media Capture、M3U8 / DASH；
-- `<img>` / `srcset` / `picture` / CSS background-image 与批量图片；
-- 更强的动态页面 / iframe / blob 资源发现；
-- EvidenceReducer / EvidenceCompiler；
-- Token / latency / usage 日志与轻量 ResourcePlan 缓存。
+- D4：自动发现策略从 viewport 扩到完整 DOM，并正式区分强资源信号 / 弱页面入口、结合轻量 Probe 升级候选；
+- D5：Network Media Capture、M3U8 / DASH，以及 `<img>` / `srcset` / `picture` / CSS background-image 和独立批量图片；
+- D6：EvidenceReducer / EvidenceCompiler、节点 A Prompt 压缩、Token / latency / usage 日志和轻量 ResourcePlan 缓存；
+- 更强的动态页面 / iframe / blob 资源发现会随 D4/D5 按实际需要补齐。
 
 Stage D 不实现真实下载执行、BT 下载、SQLite、节点 B、完整 ResourceGraph、视觉模型或大量测试。
 
@@ -139,7 +142,7 @@ Stage D 每一步优先保护生产代码构建，不追求测试覆盖率：
 
 ```powershell
 git pull --rebase origin main
-corepack pnpm --filter @xunlei-zhiqu/extension typecheck
+corepack pnpm typecheck
 corepack pnpm --filter @xunlei-zhiqu/extension build
 uv run --project services/runtime python -m compileall services/runtime/src
 ```
