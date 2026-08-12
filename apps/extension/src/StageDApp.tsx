@@ -20,20 +20,37 @@ import {
   LoaderCircle,
   MousePointer2,
   Search,
+  Sparkles,
   Star,
   TriangleAlert
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   buildAlternativeGroups,
   recommendationForItem,
   type PresentedResourceGroup
 } from './resourcePresentation';
+import { AUTO_DISCOVERY_STORAGE_KEY } from './persistentDiscovery';
 
 const RUNTIME_URL = 'http://127.0.0.1:8765';
 
 type Status = 'idle' | 'selecting' | 'scanning' | 'analyzing' | 'creating' | 'favoriting' | 'error';
 type CaptureMode = 'automatic' | 'rectangle';
+type DiscoveryState = {
+  enabled: boolean;
+  count: number;
+  fileCount: number;
+  mediaCount: number;
+  magnetCount: number;
+};
+
+const EMPTY_DISCOVERY: DiscoveryState = {
+  enabled: false,
+  count: 0,
+  fileCount: 0,
+  mediaCount: 0,
+  magnetCount: 0
+};
 
 export function StageDExtensionApp() {
   const [batch, setBatch] = useState<CaptureBatch | null>(null);
@@ -45,6 +62,8 @@ export function StageDExtensionApp() {
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
   const [annotationCount, setAnnotationCount] = useState(0);
+  const [discovery, setDiscovery] = useState<DiscoveryState>(EMPTY_DISCOVERY);
+  const [discoveryUpdating, setDiscoveryUpdating] = useState(false);
 
   const alternativeGroups = useMemo(
     () => plan ? buildAlternativeGroups(plan) : [],
@@ -53,7 +72,41 @@ export function StageDExtensionApp() {
 
   const busy = ['selecting', 'scanning', 'analyzing', 'creating', 'favoriting'].includes(status);
 
-  async function organize(mode: CaptureMode) {
+  useEffect(() => {
+    let disposed = false;
+
+    const syncCurrentTab = async () => {
+      try {
+        const values = await chrome.storage.local.get(AUTO_DISCOVERY_STORAGE_KEY);
+        const enabled = values[AUTO_DISCOVERY_STORAGE_KEY] === true;
+        if (!disposed) setDiscovery((current) => ({ ...current, enabled }));
+
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return;
+        const response = await sendContentMessage(tab.id, { type: 'XUNLEI_ZHIQU_DISCOVERY_STATUS' });
+        if (!disposed && response?.ok && response.state) setDiscovery(readDiscoveryState(response.state));
+      } catch {
+        if (!disposed) setDiscovery((current) => ({ ...current, count: 0 }));
+      }
+    };
+
+    const onDiscoveryUpdate = (message: unknown, sender: chrome.runtime.MessageSender) => {
+      const update = message as { type?: string; state?: unknown };
+      if (update.type !== 'XUNLEI_ZHIQU_DISCOVERY_UPDATE' || !update.state || !sender.tab?.id) return;
+      void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        if (!disposed && tab?.id === sender.tab?.id) setDiscovery(readDiscoveryState(update.state));
+      });
+    };
+
+    chrome.runtime.onMessage.addListener(onDiscoveryUpdate);
+    void syncCurrentTab();
+    return () => {
+      disposed = true;
+      chrome.runtime.onMessage.removeListener(onDiscoveryUpdate);
+    };
+  }, []);
+
+  async function captureResources(mode: CaptureMode) {
     setError(null);
     setPlan(null);
     setBatch(null);
@@ -80,35 +133,67 @@ export function StageDExtensionApp() {
 
       const nextBatch = captureResponse.batch as CaptureBatch;
       setBatch(nextBatch);
-      console.debug('[迅雷智取] capture', nextBatch);
-      await analyzeBatch(nextBatch);
+      setStatus('idle');
+      console.debug('[迅雷智取] local capture', nextBatch);
     } catch (captureError) {
       setStatus('error');
       setError(captureError instanceof Error ? humanizeError(captureError.message) : '整理失败，请重试。');
     }
   }
 
-  async function analyzeBatch(nextBatch: CaptureBatch) {
+  async function analyzeCurrentBatch() {
+    if (!batch) return;
     setStatus('analyzing');
-    const response = await fetch(`${RUNTIME_URL}/v1/capture/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(nextBatch)
-    });
-    if (!response.ok) throw new Error(await runtimeError(response, '智能整理失败'));
-
-    const nextPlan = (await response.json()) as ResourcePlan;
-    setPlan(nextPlan);
-    setConfirmedIds(new Set(nextPlan.selected.map((item) => item.item_id)));
-    setStatus('idle');
-    console.debug('[迅雷智取] plan', nextPlan);
+    setError(null);
+    setCreatedJob(null);
+    setFavoriteItem(null);
 
     try {
-      const count = await projectPlanToPage(nextBatch, nextPlan);
-      setAnnotationCount(count);
-    } catch (annotationError) {
-      console.warn('[迅雷智取] 无法在网页标出推荐项', annotationError);
-      setAnnotationCount(0);
+      const response = await fetch(`${RUNTIME_URL}/v1/capture/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(batch)
+      });
+      if (!response.ok) throw new Error(await runtimeError(response, '智能分析失败'));
+
+      const nextPlan = (await response.json()) as ResourcePlan;
+      setPlan(nextPlan);
+      setConfirmedIds(new Set(nextPlan.selected.map((item) => item.item_id)));
+      setStatus('idle');
+      console.debug('[迅雷智取] plan', nextPlan);
+
+      try {
+        const count = await projectPlanToPage(batch, nextPlan);
+        setAnnotationCount(count);
+      } catch (annotationError) {
+        console.warn('[迅雷智取] 无法在网页标出推荐项', annotationError);
+        setAnnotationCount(0);
+      }
+    } catch (analysisError) {
+      setStatus('error');
+      setError(analysisError instanceof Error ? humanizeError(analysisError.message) : '智能分析失败，请重试。');
+    }
+  }
+
+  async function toggleAutoDiscovery() {
+    const nextEnabled = !discovery.enabled;
+    setDiscoveryUpdating(true);
+    setError(null);
+    try {
+      await chrome.storage.local.set({ [AUTO_DISCOVERY_STORAGE_KEY]: nextEnabled });
+      setDiscovery((current) => nextEnabled ? { ...current, enabled: true } : EMPTY_DISCOVERY);
+
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return;
+      const response = await sendContentMessage(tab.id, {
+        type: 'XUNLEI_ZHIQU_SET_AUTO_DISCOVERY',
+        enabled: nextEnabled
+      });
+      if (response?.ok && response.state) setDiscovery(readDiscoveryState(response.state));
+    } catch (toggleError) {
+      setError(toggleError instanceof Error ? humanizeError(toggleError.message) : '无法修改页面自动发现设置。');
+    } finally {
+      setDiscoveryUpdating(false);
     }
   }
 
@@ -188,31 +273,75 @@ export function StageDExtensionApp() {
         <strong>迅雷智取</strong>
       </header>
 
-      {!plan && (
+      {!plan && !batch && (
         <section className="zhiqu-start-card">
           <div className="zhiqu-start-copy">
             <h1>{statusCopy(status).title}</h1>
             <p>{statusCopy(status).description}</p>
           </div>
 
-          {status === 'analyzing' && (
+          {(status === 'selecting' || status === 'scanning') && (
             <div className="zhiqu-working" role="status">
               <LoaderCircle className="spin" size={20} />
-              <span>正在整理版本、平台和格式…</span>
+              <span>{status === 'selecting' ? '等待你完成框选…' : '正在本地查找资源…'}</span>
             </div>
           )}
 
           {!busy && (
             <div className="zhiqu-start-actions">
-              <button className="zhiqu-primary" type="button" onClick={() => organize('automatic')}>
+              <button className="zhiqu-primary" type="button" onClick={() => captureResources('automatic')}>
                 <Search size={18} />智能整理
               </button>
-              <button className="zhiqu-secondary" type="button" onClick={() => organize('rectangle')}>
+              <button className="zhiqu-secondary" type="button" onClick={() => captureResources('rectangle')}>
                 <MousePointer2 size={18} />框选页面区域
               </button>
             </div>
           )}
         </section>
+      )}
+
+      {batch && !plan && (
+        <section className="zhiqu-capture-card" aria-live="polite">
+          <div className="zhiqu-capture-heading">
+            <div>
+              <h1>已找到 {batch.candidates.length} 项资源</h1>
+              <p>目前只做了本地查找，不会使用智能分析。需要推荐时再继续。</p>
+            </div>
+            <Check size={20} aria-hidden="true" />
+          </div>
+          <div className="zhiqu-capture-summary">{captureSummary(batch)}</div>
+
+          {status === 'analyzing' ? (
+            <div className="zhiqu-working" role="status">
+              <LoaderCircle className="spin" size={20} />
+              <span>正在整理版本、平台和格式…</span>
+            </div>
+          ) : (
+            <div className="zhiqu-capture-actions">
+              <button className="zhiqu-primary" type="button" onClick={analyzeCurrentBatch} disabled={busy}>
+                <Sparkles size={18} />智能分析
+              </button>
+              <button
+                className="zhiqu-secondary"
+                type="button"
+                onClick={() => captureResources(batch.trigger === 'rectangle' ? 'rectangle' : 'automatic')}
+                disabled={busy}
+              >
+                {batch.trigger === 'rectangle' ? <MousePointer2 size={18} /> : <Search size={18} />}
+                {batch.trigger === 'rectangle' ? '重新框选' : '重新扫描'}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
+      {!plan && (
+        <DiscoveryControl
+          state={discovery}
+          updating={discoveryUpdating}
+          disabled={busy}
+          onToggle={toggleAutoDiscovery}
+        />
       )}
 
       {error && (
@@ -328,7 +457,7 @@ export function StageDExtensionApp() {
             )}
           </div>
 
-          <button className="zhiqu-reselect" type="button" onClick={() => organize('rectangle')} disabled={busy}>
+          <button className="zhiqu-reselect" type="button" onClick={() => captureResources('rectangle')} disabled={busy}>
             <MousePointer2 size={17} />框选其他区域
           </button>
 
@@ -350,6 +479,39 @@ export function StageDExtensionApp() {
         </section>
       )}
     </main>
+  );
+}
+
+function DiscoveryControl({ state, updating, disabled, onToggle }: {
+  state: DiscoveryState;
+  updating: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  const detail = state.enabled
+    ? state.count > 0
+      ? `已发现 ${state.count} 项 · 只在本地，不会自动分析`
+      : '已开启 · 只在本地监听页面变化'
+    : '关闭时不会在后台扫描页面';
+
+  return (
+    <section className="zhiqu-discovery-control">
+      <div>
+        <strong>页面自动发现</strong>
+        <span>{detail}</span>
+      </div>
+      <button
+        className={`zhiqu-switch ${state.enabled ? 'active' : ''}`}
+        type="button"
+        role="switch"
+        aria-checked={state.enabled}
+        aria-label="页面自动发现"
+        onClick={onToggle}
+        disabled={disabled || updating}
+      >
+        <span />
+      </button>
+    </section>
   );
 }
 
@@ -440,18 +602,43 @@ function ResourceChoice({ item, checked, recommendation, emphasized = false, onT
 
 function statusCopy(status: Status) {
   if (status === 'selecting') {
-    return { title: '在网页上框选资源区域', description: '拖拽覆盖你关心的下载项，完成后会自动整理。' };
+    return { title: '在网页上框选资源区域', description: '拖拽覆盖你关心的下载项。完成后只收集资源，不会自动使用智能分析。' };
   }
   if (status === 'scanning') {
-    return { title: '正在查找可下载资源', description: '只在本地查看当前页面，找到资源后再进行智能整理。' };
-  }
-  if (status === 'analyzing') {
-    return { title: '正在整理下载资源', description: '正在把版本、平台、格式和附件整理成少量可理解的选择。' };
+    return { title: '正在查找可下载资源', description: '只在本地扫描当前页面，不会调用模型。' };
   }
   if (status === 'error') {
     return { title: '当前页面的下载资源', description: '可以重新智能整理，或框选一个更明确的区域。' };
   }
   return { title: '当前页面的下载资源', description: '让迅雷智取帮你整理复杂的版本、格式和附件。' };
+}
+
+function captureSummary(batch: CaptureBatch): string {
+  const counts = { file: 0, media: 0, magnet: 0, other: 0 };
+  for (const candidate of batch.candidates) {
+    if (candidate.candidate_type === 'file' || candidate.candidate_type === 'image') counts.file += 1;
+    else if (candidate.candidate_type === 'media') counts.media += 1;
+    else if (candidate.candidate_type === 'magnet') counts.magnet += 1;
+    else counts.other += 1;
+  }
+  const parts: string[] = [];
+  if (counts.file) parts.push(`文件 ${counts.file}`);
+  if (counts.media) parts.push(`媒体 ${counts.media}`);
+  if (counts.magnet) parts.push(`Magnet ${counts.magnet}`);
+  if (counts.other) parts.push(`其他 ${counts.other}`);
+  return parts.join(' · ') || `${batch.candidates.length} 项资源`;
+}
+
+function readDiscoveryState(value: unknown): DiscoveryState {
+  if (!value || typeof value !== 'object') return EMPTY_DISCOVERY;
+  const item = value as Partial<DiscoveryState>;
+  return {
+    enabled: item.enabled === true,
+    count: typeof item.count === 'number' ? item.count : 0,
+    fileCount: typeof item.fileCount === 'number' ? item.fileCount : 0,
+    mediaCount: typeof item.mediaCount === 'number' ? item.mediaCount : 0,
+    magnetCount: typeof item.magnetCount === 'number' ? item.magnetCount : 0
+  };
 }
 
 async function requestRectangleSelection(tabId: number) {
@@ -513,7 +700,7 @@ async function runtimeError(response: Response, fallback: string): Promise<strin
 
 function humanizeError(value: string): string {
   return value
-    .replaceAll('节点 A', '智能整理')
+    .replaceAll('节点 A', '智能分析')
     .replaceAll('ResourcePlan', '整理结果')
     .replaceAll('EvidencePack', '资源信息')
     .replaceAll('candidate_id', '资源标识')
