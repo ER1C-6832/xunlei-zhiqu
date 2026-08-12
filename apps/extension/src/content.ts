@@ -1,9 +1,11 @@
-import type { DomRect } from '@xunlei-zhiqu/contracts';
+import type { CaptureBatch, DomRect, ResourcePlan } from '@xunlei-zhiqu/contracts';
+import { buildAutomaticCaptureBatch } from './autoCapture';
 import { buildCaptureBatchFromRect } from './capture';
 import { enrichFusedCandidateMetadata } from './captureEnrichment';
+import { clearPlanAnnotations, focusCandidate, renderPlanAnnotations } from './pageAnnotations';
 
 type CaptureResponse =
-  | { ok: true; batch: ReturnType<typeof buildCaptureBatchFromRect> }
+  | { ok: true; batch: CaptureBatch }
   | { ok: false; error: string };
 
 let activeCleanup: (() => void) | null = null;
@@ -13,6 +15,7 @@ function startRectangleSelection(
   sendResponse: (response: CaptureResponse) => void
 ): void {
   activeCleanup?.();
+  clearPlanAnnotations();
 
   const overlay = document.createElement('div');
   overlay.id = 'xunlei-zhiqu-selection-overlay';
@@ -133,12 +136,48 @@ function startRectangleSelection(
   activeCleanup = cleanup;
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (
-    message?.type !== 'XUNLEI_ZHIQU_START_SELECTION'
-    && message?.type !== 'XUNLEI_ZHIQU_CAPTURE'
-  ) return false;
+function runAutomaticScan(tabId: number | undefined): CaptureResponse {
+  activeCleanup?.();
+  clearPlanAnnotations();
+  try {
+    const batch = enrichFusedCandidateMetadata(buildAutomaticCaptureBatch(tabId));
+    if (!batch.candidates.length) {
+      return { ok: false, error: '当前可见区域没有发现明显的文件、媒体、Magnet 或下载入口；可改用智能框选。' };
+    }
+    return { ok: true, batch };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : '自动扫描失败' };
+  }
+}
 
-  startRectangleSelection(typeof message.tabId === 'number' ? message.tabId : undefined, sendResponse);
-  return true;
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'XUNLEI_ZHIQU_START_SELECTION' || message?.type === 'XUNLEI_ZHIQU_CAPTURE') {
+    startRectangleSelection(typeof message.tabId === 'number' ? message.tabId : undefined, sendResponse);
+    return true;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_AUTO_SCAN') {
+    sendResponse(runAutomaticScan(typeof message.tabId === 'number' ? message.tabId : undefined));
+    return false;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_RENDER_PLAN') {
+    const count = renderPlanAnnotations(message.batch as CaptureBatch, message.plan as ResourcePlan);
+    sendResponse({ ok: true, count });
+    return false;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_CLEAR_PLAN') {
+    clearPlanAnnotations();
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_FOCUS_CANDIDATE') {
+    const focused = focusCandidate(message.batch as CaptureBatch, String(message.candidateId || ''));
+    sendResponse({ ok: focused });
+    return false;
+  }
+
+  return false;
 });
