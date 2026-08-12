@@ -2,10 +2,13 @@ import type { CaptureBatch, DomRect, ResourcePlan } from '@xunlei-zhiqu/contract
 import { buildAutomaticCaptureBatch, buildFullPageCaptureBatch } from './autoCapture';
 import { buildCaptureBatchFromRect } from './capture';
 import { enrichFusedCandidateMetadata } from './captureEnrichment';
+import { buildImageCaptureBatch } from './imageCapture';
+import { mergeNetworkMediaIntoBatch, readObservedNetworkMedia } from './networkMediaCandidates';
 import { clearPlanAnnotations, focusCandidate, renderPlanAnnotations } from './pageAnnotations';
 import {
   applyPersistentDiscoveryEnabled,
   getPersistentDiscoveryState,
+  ingestNetworkMediaDiscovery,
   initializePersistentDiscovery,
   refreshPersistentDiscovery
 } from './persistentDiscovery';
@@ -128,13 +131,16 @@ function startRectangleSelection(
 
     overlay.style.display = 'none';
     requestAnimationFrame(() => {
-      try {
-        const batch = enrichFusedCandidateMetadata(buildCaptureBatchFromRect(rect, tabId));
-        if (!batch.candidates.length) finish({ ok: false, error: '框选区域内没有发现候选资源' });
-        else finish({ ok: true, batch });
-      } catch (error) {
-        finish({ ok: false, error: error instanceof Error ? error.message : '框选采集失败' });
-      }
+      void (async () => {
+        try {
+          const base = enrichFusedCandidateMetadata(buildCaptureBatchFromRect(rect, tabId));
+          const batch = mergeNetworkMediaIntoBatch(base, await readObservedNetworkMedia());
+          if (!batch.candidates.length) finish({ ok: false, error: '框选区域内没有发现候选资源' });
+          else finish({ ok: true, batch });
+        } catch (error) {
+          finish({ ok: false, error: error instanceof Error ? error.message : '框选采集失败' });
+        }
+      })();
     });
   });
 
@@ -142,13 +148,14 @@ function startRectangleSelection(
   activeCleanup = cleanup;
 }
 
-function runAutomaticScan(tabId: number | undefined): CaptureResponse {
+async function runAutomaticScan(tabId: number | undefined): Promise<CaptureResponse> {
   activeCleanup?.();
   clearPlanAnnotations();
   try {
-    const batch = enrichFusedCandidateMetadata(buildAutomaticCaptureBatch(tabId));
+    const base = enrichFusedCandidateMetadata(buildAutomaticCaptureBatch(tabId));
+    const batch = mergeNetworkMediaIntoBatch(base, await readObservedNetworkMedia());
     if (!batch.candidates.length) {
-      return { ok: false, error: '当前可见区域没有发现明显的文件、媒体、Magnet 或下载入口；可改用框选或整个网页。' };
+      return { ok: false, error: '当前可见区域没有发现明显资源；可改用框选、整个网页或批量图片。' };
     }
     return { ok: true, batch };
   } catch (error) {
@@ -156,13 +163,14 @@ function runAutomaticScan(tabId: number | undefined): CaptureResponse {
   }
 }
 
-function runFullPageScan(tabId: number | undefined): CaptureResponse {
+async function runFullPageScan(tabId: number | undefined): Promise<CaptureResponse> {
   activeCleanup?.();
   clearPlanAnnotations();
   try {
-    const batch = enrichFusedCandidateMetadata(buildFullPageCaptureBatch(tabId));
+    const base = enrichFusedCandidateMetadata(buildFullPageCaptureBatch(tabId));
+    const batch = mergeNetworkMediaIntoBatch(base, await readObservedNetworkMedia());
     if (!batch.candidates.length) {
-      return { ok: false, error: '整个网页没有发现明显的文件、媒体、Magnet 或下载入口。' };
+      return { ok: false, error: '整个网页没有发现明显资源。' };
     }
     return { ok: true, batch };
   } catch (error) {
@@ -170,24 +178,20 @@ function runFullPageScan(tabId: number | undefined): CaptureResponse {
   }
 }
 
-function runPersistentDiscoveryCapture(tabId: number | undefined): CaptureResponse {
+async function runPersistentDiscoveryCapture(tabId: number | undefined): Promise<CaptureResponse> {
   activeCleanup?.();
   clearPlanAnnotations();
   try {
     const discovery = refreshPersistentDiscovery();
     const wanted = new Set(discovery.items.map((item) => discoveryIdentity(item.value)));
     if (!wanted.size) {
-      return { ok: false, error: '当前可见区域没有自动发现到高置信资源。' };
+      return { ok: false, error: '当前网页没有自动发现到高置信资源。' };
     }
 
-    const rect: DomRect = {
-      x: 0,
-      y: 0,
-      width: window.innerWidth,
-      height: window.innerHeight
-    };
-    const base = enrichFusedCandidateMetadata(buildCaptureBatchFromRect(rect, tabId));
-    const candidates = base.candidates.filter((candidate) => wanted.has(discoveryIdentity(candidate.value)));
+    const network = await readObservedNetworkMedia();
+    const base = enrichFusedCandidateMetadata(buildFullPageCaptureBatch(tabId));
+    const fused = mergeNetworkMediaIntoBatch(base, network);
+    const candidates = fused.candidates.filter((candidate) => wanted.has(discoveryIdentity(candidate.value)));
     if (!candidates.length) {
       return { ok: false, error: '自动发现结果已变化，请等待页面稳定后重试。' };
     }
@@ -195,25 +199,36 @@ function runPersistentDiscoveryCapture(tabId: number | undefined): CaptureRespon
     return {
       ok: true,
       batch: {
-        ...base,
+        ...fused,
         trigger: 'automatic',
         selection: {
           type: 'automatic',
           candidate_ids: candidates.map((candidate) => candidate.candidate_id),
-          rect
+          rect: null
         },
         candidates,
         metadata: {
-          ...(base.metadata || {}),
-          capture_version: 'stage-d.3',
-          automatic_scan: 'persistent_discovery_visible_high_confidence',
-          capture_scope: 'viewport',
+          ...(fused.metadata || {}),
+          capture_version: 'stage-d.5',
+          automatic_scan: 'persistent_discovery_full_dom_high_confidence',
+          capture_scope: 'full_page',
           discovery_count: discovery.count
         }
       }
     };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : '自动发现候选读取失败' };
+  }
+}
+
+function runImageScan(tabId: number | undefined): CaptureResponse {
+  activeCleanup?.();
+  try {
+    const batch = buildImageCaptureBatch(tabId);
+    if (!batch.candidates.length) return { ok: false, error: '当前网页没有发现可用于批量处理的图片。' };
+    return { ok: true, batch };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : '批量图片扫描失败' };
   }
 }
 
@@ -230,17 +245,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === 'XUNLEI_ZHIQU_AUTO_SCAN') {
-    sendResponse(runAutomaticScan(typeof message.tabId === 'number' ? message.tabId : undefined));
-    return false;
+    void runAutomaticScan(typeof message.tabId === 'number' ? message.tabId : undefined).then(sendResponse);
+    return true;
   }
 
   if (message?.type === 'XUNLEI_ZHIQU_FULL_PAGE_SCAN') {
-    sendResponse(runFullPageScan(typeof message.tabId === 'number' ? message.tabId : undefined));
-    return false;
+    void runFullPageScan(typeof message.tabId === 'number' ? message.tabId : undefined).then(sendResponse);
+    return true;
   }
 
   if (message?.type === 'XUNLEI_ZHIQU_DISCOVERY_CAPTURE') {
-    sendResponse(runPersistentDiscoveryCapture(typeof message.tabId === 'number' ? message.tabId : undefined));
+    void runPersistentDiscoveryCapture(typeof message.tabId === 'number' ? message.tabId : undefined).then(sendResponse);
+    return true;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_IMAGE_SCAN') {
+    sendResponse(runImageScan(typeof message.tabId === 'number' ? message.tabId : undefined));
+    return false;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_NETWORK_MEDIA_UPDATE' && message.item) {
+    ingestNetworkMediaDiscovery(message.item);
+    sendResponse({ ok: true });
     return false;
   }
 
