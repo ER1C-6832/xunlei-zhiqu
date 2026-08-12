@@ -38,20 +38,33 @@ const AUTO_DISCOVERY_STORAGE_KEY = 'zhiqu_auto_discovery_enabled';
 
 type Status = 'idle' | 'selecting' | 'scanning' | 'analyzing' | 'creating' | 'favoriting' | 'error';
 type CaptureMode = 'automatic' | 'rectangle';
+type DiscoveryKind = 'file' | 'media' | 'magnet' | 'entry';
+type DiscoveryItem = {
+  value: string;
+  kind: DiscoveryKind;
+  label: string;
+  host: string | null;
+  extension: string | null;
+};
 type DiscoveryState = {
   enabled: boolean;
   count: number;
   fileCount: number;
   mediaCount: number;
   magnetCount: number;
+  entryCount: number;
+  items: DiscoveryItem[];
 };
+type CapturedCandidate = CaptureBatch['candidates'][number];
 
 const EMPTY_DISCOVERY: DiscoveryState = {
   enabled: false,
   count: 0,
   fileCount: 0,
   mediaCount: 0,
-  magnetCount: 0
+  magnetCount: 0,
+  entryCount: 0,
+  items: []
 };
 
 export function StageDExtensionApp() {
@@ -88,7 +101,7 @@ export function StageDExtensionApp() {
         const response = await sendContentMessage(tab.id, { type: 'XUNLEI_ZHIQU_DISCOVERY_STATUS' });
         if (!disposed && response?.ok && response.state) setDiscovery(readDiscoveryState(response.state));
       } catch {
-        if (!disposed) setDiscovery((current) => ({ ...current, count: 0 }));
+        if (!disposed) setDiscovery((current) => ({ ...current, count: 0, items: [] }));
       }
     };
 
@@ -108,7 +121,7 @@ export function StageDExtensionApp() {
     };
   }, []);
 
-  async function captureResources(mode: CaptureMode) {
+  function prepareLocalCapture(mode: CaptureMode) {
     setError(null);
     setPlan(null);
     setBatch(null);
@@ -117,6 +130,16 @@ export function StageDExtensionApp() {
     setConfirmedIds(new Set());
     setAnnotationCount(0);
     setStatus(mode === 'automatic' ? 'scanning' : 'selecting');
+  }
+
+  function acceptLocalBatch(nextBatch: CaptureBatch) {
+    setBatch(nextBatch);
+    setStatus('idle');
+    console.debug('[迅雷智取] local capture', nextBatch);
+  }
+
+  async function captureResources(mode: CaptureMode) {
+    prepareLocalCapture(mode);
 
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -133,13 +156,26 @@ export function StageDExtensionApp() {
         throw new Error(mode === 'automatic' ? '当前页面没有找到明显的可下载资源，可以改用框选。' : '框选区域内没有找到可下载资源。');
       }
 
-      const nextBatch = captureResponse.batch as CaptureBatch;
-      setBatch(nextBatch);
-      setStatus('idle');
-      console.debug('[迅雷智取] local capture', nextBatch);
+      acceptLocalBatch(captureResponse.batch as CaptureBatch);
     } catch (captureError) {
       setStatus('error');
       setError(captureError instanceof Error ? humanizeError(captureError.message) : '整理失败，请重试。');
+    }
+  }
+
+  async function captureDiscoveryResources() {
+    prepareLocalCapture('automatic');
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) throw new Error('未找到当前标签页');
+      const response = await sendContentMessage(tab.id, { type: 'XUNLEI_ZHIQU_DISCOVERY_CAPTURE', tabId: tab.id });
+      if (!response?.ok || !response.batch?.candidates?.length) {
+        throw new Error(response?.error || '自动发现结果已变化，请重新查看。');
+      }
+      acceptLocalBatch(response.batch as CaptureBatch);
+    } catch (captureError) {
+      setStatus('error');
+      setError(captureError instanceof Error ? humanizeError(captureError.message) : '读取自动发现结果失败。');
     }
   }
 
@@ -197,6 +233,17 @@ export function StageDExtensionApp() {
     } finally {
       setDiscoveryUpdating(false);
     }
+  }
+
+  async function focusLocalCandidate(candidateId: string) {
+    if (!batch) return;
+    const tabId = await batchTabId(batch);
+    if (!tabId) return;
+    await sendContentMessage(tabId, {
+      type: 'XUNLEI_ZHIQU_FOCUS_CANDIDATE',
+      batch,
+      candidateId
+    }).catch(() => undefined);
   }
 
   function toggleItem(itemId: string) {
@@ -306,12 +353,17 @@ export function StageDExtensionApp() {
         <section className="zhiqu-capture-card" aria-live="polite">
           <div className="zhiqu-capture-heading">
             <div>
-              <h1>已找到 {batch.candidates.length} 项资源</h1>
-              <p>目前只做了本地查找，不会使用智能分析。需要推荐时再继续。</p>
+              <h1>{capturePathTitle(batch)} · {batch.candidates.length} 项</h1>
+              <p>{capturePathDescription(batch)}</p>
             </div>
             <Check size={20} aria-hidden="true" />
           </div>
           <div className="zhiqu-capture-summary">{captureSummary(batch)}</div>
+
+          <CapturedResources
+            batch={batch}
+            onFocus={(candidateId) => void focusLocalCandidate(candidateId)}
+          />
 
           {status === 'analyzing' ? (
             <div className="zhiqu-working" role="status">
@@ -323,15 +375,14 @@ export function StageDExtensionApp() {
               <button className="zhiqu-primary" type="button" onClick={analyzeCurrentBatch} disabled={busy}>
                 <Sparkles size={18} />智能分析
               </button>
-              <button
-                className="zhiqu-secondary"
-                type="button"
-                onClick={() => captureResources(batch.trigger === 'rectangle' ? 'rectangle' : 'automatic')}
-                disabled={busy}
-              >
-                {batch.trigger === 'rectangle' ? <MousePointer2 size={18} /> : <Search size={18} />}
-                {batch.trigger === 'rectangle' ? '重新框选' : '重新扫描'}
-              </button>
+              <div className="zhiqu-capture-secondary-actions">
+                <button className="zhiqu-secondary" type="button" onClick={() => captureResources('automatic')} disabled={busy}>
+                  <Search size={17} />重新扫描
+                </button>
+                <button className="zhiqu-secondary" type="button" onClick={() => captureResources('rectangle')} disabled={busy}>
+                  <MousePointer2 size={17} />框选页面区域
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -343,6 +394,7 @@ export function StageDExtensionApp() {
           updating={discoveryUpdating}
           disabled={busy}
           onToggle={toggleAutoDiscovery}
+          onUseCandidates={() => void captureDiscoveryResources()}
         />
       )}
 
@@ -459,9 +511,14 @@ export function StageDExtensionApp() {
             )}
           </div>
 
-          <button className="zhiqu-reselect" type="button" onClick={() => captureResources('rectangle')} disabled={busy}>
-            <MousePointer2 size={17} />框选其他区域
-          </button>
+          <div className="zhiqu-reselect-actions">
+            <button className="zhiqu-reselect" type="button" onClick={() => captureResources('automatic')} disabled={busy}>
+              <Search size={17} />重新扫描当前页
+            </button>
+            <button className="zhiqu-reselect" type="button" onClick={() => captureResources('rectangle')} disabled={busy}>
+              <MousePointer2 size={17} />框选其他区域
+            </button>
+          </div>
 
           {favoriteItem && (
             <div className="zhiqu-success" role="status">
@@ -484,34 +541,100 @@ export function StageDExtensionApp() {
   );
 }
 
-function DiscoveryControl({ state, updating, disabled, onToggle }: {
+function CapturedResources({ batch, onFocus }: {
+  batch: CaptureBatch;
+  onFocus: (candidateId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="zhiqu-local-resources">
+      <button className="zhiqu-local-resources-toggle" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+        <span>{open ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</span>
+        <strong>查看候选资源</strong>
+        <b>{batch.candidates.length}</b>
+      </button>
+      {open && (
+        <div className="zhiqu-local-resource-list">
+          {batch.candidates.map((candidate) => (
+            <button
+              className="zhiqu-local-resource-row"
+              type="button"
+              key={candidate.candidate_id}
+              onClick={() => onFocus(candidate.candidate_id)}
+              title="在网页中定位这个资源"
+            >
+              <span className="zhiqu-local-resource-main">
+                <strong>{candidateLabel(candidate)}</strong>
+                <small>{candidateMeta(candidate)}</small>
+              </span>
+              <em>{candidateKindLabel(candidate)}</em>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DiscoveryControl({ state, updating, disabled, onToggle, onUseCandidates }: {
   state: DiscoveryState;
   updating: boolean;
   disabled: boolean;
   onToggle: () => void;
+  onUseCandidates: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   return (
     <section className="zhiqu-discovery-control">
-      <div>
-        <strong>页面自动发现</strong>
-        <span>
-          {state.enabled
-            ? state.count > 0
-              ? `已发现 ${state.count} 项 · 只在本地，不会自动分析`
-              : '已开启 · 只在本地监听页面变化'
-            : '关闭时不会在后台扫描页面'}
-        </span>
+      <div className="zhiqu-discovery-head">
+        <div>
+          <strong>页面自动发现</strong>
+          <span>
+            {state.enabled
+              ? state.count > 0
+                ? `高置信发现 ${state.count} 项 · 与“智能整理”是不同候选路径`
+                : '已开启 · 只在本地监听页面变化'
+              : '关闭时不会在后台扫描页面'}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`zhiqu-switch ${state.enabled ? 'active' : ''}`}
+          aria-pressed={state.enabled}
+          aria-label={state.enabled ? '关闭页面自动发现' : '开启页面自动发现'}
+          disabled={disabled || updating}
+          onClick={onToggle}
+        >
+          <span />
+        </button>
       </div>
-      <button
-        type="button"
-        className={`zhiqu-switch ${state.enabled ? 'active' : ''}`}
-        aria-pressed={state.enabled}
-        aria-label={state.enabled ? '关闭页面自动发现' : '开启页面自动发现'}
-        disabled={disabled || updating}
-        onClick={onToggle}
-      >
-        <span />
-      </button>
+
+      {state.enabled && state.count > 0 && (
+        <div className="zhiqu-discovery-body">
+          <div className="zhiqu-capture-summary">{discoverySummary(state)}</div>
+          <button className="zhiqu-local-resources-toggle" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+            <span>{open ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</span>
+            <strong>查看自动发现资源</strong>
+            <b>{state.count}</b>
+          </button>
+          {open && (
+            <div className="zhiqu-local-resource-list discovery">
+              {state.items.map((item) => (
+                <div className="zhiqu-local-resource-row static" key={`${item.kind}:${item.value}`}>
+                  <span className="zhiqu-local-resource-main">
+                    <strong>{item.label}</strong>
+                    <small>{[item.host, item.extension ? item.extension.toUpperCase() : null].filter(Boolean).join(' · ') || '当前页面'}</small>
+                  </span>
+                  <em>{discoveryKindLabel(item.kind)}</em>
+                </div>
+              ))}
+            </div>
+          )}
+          <button className="zhiqu-discovery-use" type="button" onClick={onUseCandidates} disabled={disabled}>
+            使用这批资源
+          </button>
+        </div>
+      )}
     </section>
   );
 }
@@ -614,6 +737,18 @@ function statusCopy(status: Status) {
   return { title: '当前页面的下载资源', description: '先在本地查找资源，需要推荐时再进行智能分析。' };
 }
 
+function capturePathTitle(batch: CaptureBatch): string {
+  if (batch.trigger === 'rectangle') return '框选结果';
+  if (batch.metadata?.automatic_scan === 'persistent_discovery_visible_high_confidence') return '自动发现候选';
+  return '当前页扫描结果';
+}
+
+function capturePathDescription(batch: CaptureBatch): string {
+  if (batch.trigger === 'rectangle') return '来自你框选的区域。先查看资源，需要推荐时再智能分析。';
+  if (batch.metadata?.automatic_scan === 'persistent_discovery_visible_high_confidence') return '来自页面自动发现的高置信资源。它和主动扫描可能不同。';
+  return '来自当前可见页面的主动扫描。先查看资源，需要推荐时再智能分析。';
+}
+
 function captureSummary(batch: CaptureBatch): string {
   const counts = batch.candidates.reduce<Record<string, number>>((acc, candidate) => {
     const key = candidate.candidate_type;
@@ -634,14 +769,101 @@ function captureSummary(batch: CaptureBatch): string {
     .join(' · ');
 }
 
+function discoverySummary(state: DiscoveryState): string {
+  const parts = [
+    state.fileCount ? `文件 ${state.fileCount}` : null,
+    state.mediaCount ? `媒体 ${state.mediaCount}` : null,
+    state.magnetCount ? `Magnet ${state.magnetCount}` : null,
+    state.entryCount ? `入口 ${state.entryCount}` : null
+  ].filter(Boolean);
+  return parts.join(' · ') || `${state.count} 项`;
+}
+
+function candidateLabel(candidate: CapturedCandidate): string {
+  const metadataFilename = typeof candidate.metadata?.filename === 'string' ? candidate.metadata.filename : null;
+  return candidate.display_name
+    || candidate.anchor_text
+    || metadataFilename
+    || filenameFromValue(candidate.value)
+    || '未命名资源';
+}
+
+function candidateMeta(candidate: CapturedCandidate): string {
+  const host = hostFromValue(candidate.value);
+  const extension = typeof candidate.metadata?.extension === 'string'
+    ? candidate.metadata.extension
+    : extensionFromValue(candidate.value);
+  const parts = [host, extension ? extension.toUpperCase() : null].filter(Boolean);
+  if (candidate.candidate_type === 'page') parts.push('下载入口');
+  if (candidate.candidate_type === 'unknown') parts.push('待识别');
+  return parts.join(' · ') || '当前页面';
+}
+
+function candidateKindLabel(candidate: CapturedCandidate): string {
+  if (candidate.candidate_type === 'media') return '媒体';
+  if (candidate.candidate_type === 'magnet') return '磁力';
+  if (candidate.candidate_type === 'image') return '图片';
+  if (candidate.candidate_type === 'file') return '文件';
+  if (candidate.candidate_type === 'page') return '入口';
+  return '待识别';
+}
+
+function discoveryKindLabel(kind: DiscoveryKind): string {
+  if (kind === 'media') return '媒体';
+  if (kind === 'magnet') return '磁力';
+  if (kind === 'entry') return '入口';
+  return '文件';
+}
+
+function filenameFromValue(value: string): string | null {
+  if (value.startsWith('magnet:')) {
+    const name = value.match(/[?&]dn=([^&]+)/i)?.[1];
+    if (!name) return null;
+    try {
+      return decodeURIComponent(name.replace(/\+/g, ' '));
+    } catch {
+      return name;
+    }
+  }
+  try {
+    const filename = new URL(value).pathname.split('/').filter(Boolean).pop();
+    return filename ? decodeURIComponent(filename) : null;
+  } catch {
+    return null;
+  }
+}
+
+function extensionFromValue(value: string): string | null {
+  return filenameFromValue(value)?.match(/\.([a-z0-9]{1,10})$/i)?.[1]?.toLowerCase() || null;
+}
+
+function hostFromValue(value: string): string | null {
+  if (value.startsWith('magnet:')) return null;
+  try {
+    return new URL(value).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
 function readDiscoveryState(value: unknown): DiscoveryState {
   const input = value as Partial<DiscoveryState> | null;
+  const items = Array.isArray(input?.items)
+    ? input.items.filter((item): item is DiscoveryItem => Boolean(
+      item
+      && typeof item.value === 'string'
+      && typeof item.label === 'string'
+      && ['file', 'media', 'magnet', 'entry'].includes(item.kind)
+    ))
+    : [];
   return {
     enabled: input?.enabled === true,
     count: safeNumber(input?.count),
     fileCount: safeNumber(input?.fileCount),
     mediaCount: safeNumber(input?.mediaCount),
-    magnetCount: safeNumber(input?.magnetCount)
+    magnetCount: safeNumber(input?.magnetCount),
+    entryCount: safeNumber(input?.entryCount),
+    items
   };
 }
 
