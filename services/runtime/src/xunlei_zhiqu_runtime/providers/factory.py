@@ -20,5 +20,6 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             connect_timeout_seconds=settings.model_connect_timeout_seconds,
             read_timeout_seconds=settings.model_read_timeout_seconds,
             write_timeout_seconds=settings.model_write_timeout_seconds,
+            max_completion_tokens=settings.model_max_completion_tokens,
         )
     raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
