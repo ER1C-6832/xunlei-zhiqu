@@ -1,0 +1,58 @@
+.zhiqu-full-page-action {
+  width: 100%;
+  border-style: dashed;
+  color: #315f9d;
+  background: #f8fbff;
+}
+
+.zhiqu-full-page-action:hover {
+  border-style: solid;
+  background: #eef5ff;
+}
+
+.zhiqu-reselect-actions .zhiqu-full-page-action {
+  grid-column: 1 / -1;
+}
+
+.zhiqu-page-note-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.zhiqu-page-note-actions > span {
+  min-width: 0;
+}
+
+.zhiqu-page-note-actions > button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid #b9dfca;
+  border-radius: 8px;
+  color: #236347;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.zhiqu-page-note-actions > button:hover {
+  border-color: #81c6a1;
+  background: #f7fffa;
+}
+
+@media (max-width: 390px) {
+  .zhiqu-page-note-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .zhiqu-page-note-actions > button {
+    width: 100%;
+  }
+}
