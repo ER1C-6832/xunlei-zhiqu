@@ -1,29 +1,31 @@
 import json
-from typing import Any
+from uuid import uuid4
 
 import httpx
 
-from xunlei_zhiqu_runtime.models import CaptureBatch, ResourcePlan
+from xunlei_zhiqu_runtime.models import EvidencePack, ResourcePlan
 from xunlei_zhiqu_runtime.providers.base import ModelProviderAdapter
 
 
-SYSTEM_PROMPT = """你是迅雷智取的节点 A：资源理解与选型节点。
-你不猜用户隐藏意图。你只根据候选 ID、页面证据、技术元数据、用户显式操作和客观设备兼容信息，
-解释资源差异并输出可修改的 ResourcePlan。不得编造 URL、文件属性、版本、字幕、清晰度或兼容性。
-输出必须是单个 JSON 对象，字段与提供的 ResourcePlan JSON Schema 一致。"""
+SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型节点。
+
+硬性规则：
+1. 不猜用户隐藏意图。当前设备信息只是客观兼容证据，不等于用户唯一目标。
+2. 只能依据 EvidencePack 中已有事实；不得编造 URL、版本、平台、架构、语言、字幕、清晰度、大小、哈希或兼容性。
+3. 只能引用 EvidencePack 中已经存在的 candidate id，绝不能生成新的 candidate id。
+4. ResourcePlan 是 AI 分析与推荐，不代表用户最终决定；措辞必须允许用户修改。
+5. candidate_type=page 不是自动排除理由。只有证据显示它是导航、无关入口或不适合作为资源时才可在语义层标为 excluded/unknown。
+6. 对专业文件名和技术缩写给出普通用户能理解的解释；比较版本、平台、架构、包类型、媒体规格和附件关系时说明证据来源。
+7. 存在合理分歧或证据不足时放入 uncertainties，不要硬猜。
+8. recommendations 必须是场景化建议，例如当前设备兼容、质量优先、体积优先或手动选择，并引用已有 item_id。
+
+输出单个 JSON 对象，符合 ResourcePlan JSON Schema。"""
 
 
 class OpenAICompatibleProvider(ModelProviderAdapter):
     name = "openai_compatible"
 
-    def __init__(
-        self,
-        *,
-        base_url: str,
-        api_key: str,
-        model: str,
-        timeout_seconds: float,
-    ) -> None:
+    def __init__(self, *, base_url: str, api_key: str, model: str, timeout_seconds: float) -> None:
         if not api_key:
             raise ValueError("MODEL_API_KEY is required for openai_compatible provider")
         self._model = model
@@ -33,11 +35,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             timeout=timeout_seconds,
         )
 
-    async def analyze(
-        self,
-        batch: CaptureBatch,
-        evidence_pack: dict[str, Any],
-    ) -> ResourcePlan:
+    async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
         payload = {
             "model": self._model,
             "temperature": 0.1,
@@ -48,8 +46,8 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "batch_id": batch.batch_id,
-                            "evidence_pack": evidence_pack,
+                            "task": "解释资源是什么，翻译技术名称，比较版本/规格，给出可修改的场景化推荐，并标出不确定项。",
+                            "evidence_pack": evidence_pack.model_dump(mode="json"),
                             "resource_plan_schema": ResourcePlan.model_json_schema(),
                         },
                         ensure_ascii=False,
@@ -64,9 +62,10 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         if not isinstance(content, str):
             raise ValueError("OpenAI-compatible response content must be a JSON string")
         parsed = json.loads(self._strip_fences(content))
-        parsed.setdefault("schema_version", "0.1")
-        parsed.setdefault("batch_id", batch.batch_id)
-        parsed.setdefault("provider", self.name)
+        parsed["schema_version"] = "0.1"
+        parsed["batch_id"] = evidence_pack.batch_id
+        parsed["provider"] = self.name
+        parsed.setdefault("plan_id", f"plan_{uuid4().hex[:12]}")
         return ResourcePlan.model_validate(parsed)
 
     async def aclose(self) -> None:
