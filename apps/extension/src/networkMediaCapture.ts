@@ -10,17 +10,29 @@ export type NetworkMediaRecord = {
   detected_at: number;
 };
 
+const AUTO_DISCOVERY_STORAGE_KEY = 'zhiqu_auto_discovery_enabled';
 const STORAGE_PREFIX = 'zhiqu_network_media_tab_';
 const MAX_PER_TAB = 120;
 const MEDIA_URL_PATTERN = /\.(?:3g2|3gp|aac|aiff|amr|ape|asf|avi|av1|divx|f4v|flac|flv|m2t|m2ts|m4a|m4v|mid|mka|mkv|mov|mp3|mp4|mpe|mpeg|mpg|mpga|ogg|opus|qt|ra|rm|rmvb|vob|wav|webm|wma)(?:[?#]|$)/i;
 const HLS_PATTERN = /\.m3u8(?:[?#]|$)/i;
 const DASH_PATTERN = /\.mpd(?:[?#]|$)/i;
 const HLS_SEGMENT_PATTERN = /\.ts(?:[?#]|$)/i;
+let discoveryEnabled = false;
 
 export function registerNetworkMediaCapture(): void {
+  void chrome.storage.local.get(AUTO_DISCOVERY_STORAGE_KEY)
+    .then((values) => { discoveryEnabled = values[AUTO_DISCOVERY_STORAGE_KEY] === true; })
+    .catch(() => { discoveryEnabled = false; });
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes[AUTO_DISCOVERY_STORAGE_KEY]) return;
+    discoveryEnabled = changes[AUTO_DISCOVERY_STORAGE_KEY].newValue === true;
+    if (!discoveryEnabled) void clearNetworkRecords();
+  });
+
   chrome.webRequest.onHeadersReceived.addListener(
     (details) => {
-      if (details.tabId < 0 || !/^https?:/i.test(details.url)) return;
+      if (!discoveryEnabled || details.tabId < 0 || !/^https?:/i.test(details.url)) return;
       const headers = readHeaders(details.responseHeaders || []);
       const kind = classifyNetworkMedia(details.url, headers.contentType, String(details.type));
       if (!kind) return;
@@ -43,7 +55,7 @@ export function registerNetworkMediaCapture(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== 'XUNLEI_ZHIQU_NETWORK_MEDIA_GET') return false;
     const tabId = typeof message.tabId === 'number' ? message.tabId : sender.tab?.id;
-    if (typeof tabId !== 'number') {
+    if (!discoveryEnabled || typeof tabId !== 'number') {
       sendResponse({ ok: true, items: [] });
       return false;
     }
@@ -58,7 +70,7 @@ export function registerNetworkMediaCapture(): void {
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo.status === 'loading' && changeInfo.url) {
+    if (changeInfo.status === 'loading') {
       void chrome.storage.session.remove(storageKey(tabId));
     }
   });
@@ -84,6 +96,12 @@ async function readRecords(tabId: number): Promise<NetworkMediaRecord[]> {
   const value = stored[key];
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord).slice(0, MAX_PER_TAB);
+}
+
+async function clearNetworkRecords(): Promise<void> {
+  const stored = await chrome.storage.session.get(null);
+  const keys = Object.keys(stored).filter((key) => key.startsWith(STORAGE_PREFIX));
+  if (keys.length) await chrome.storage.session.remove(keys);
 }
 
 function classifyNetworkMedia(
