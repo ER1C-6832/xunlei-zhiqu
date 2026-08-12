@@ -5,6 +5,11 @@ import type {
   CandidateType,
   DomRect
 } from '@xunlei-zhiqu/contracts';
+import {
+  candidateTypeFromResourceExtension,
+  extensionFromValue,
+  resourceFamilyMetadata
+} from './resourceExtensions';
 
 const MAX_CANDIDATES = 160;
 const URL_PATTERN = /https?:\/\/[^\s<>"'`]+/giu;
@@ -152,7 +157,7 @@ export function buildCaptureBatchFromRect(selectionRect: DomRect, tabId?: number
     },
     candidates: finalCandidates,
     metadata: {
-      capture_version: 'stage-c.1',
+      capture_version: 'stage-d.3',
       viewport: { width: window.innerWidth, height: window.innerHeight, device_pixel_ratio: window.devicePixelRatio },
       channels: ['dom_link', 'selected_text', 'media_element']
     }
@@ -192,11 +197,14 @@ function addObservation(
     existing.nearby_text ||= observation.nearbyText;
     existing.section_heading ||= observation.sectionHeading;
     existing.display_name ||= observation.displayName;
+    if (existing.candidate_type === 'unknown' && observation.candidateType !== 'unknown') {
+      existing.candidate_type = observation.candidateType;
+    }
     return;
   }
 
   const filename = filenameFromValue(value) || observation.displayName || null;
-  const extension = filename ? extensionFromFilename(filename) : null;
+  const extension = extensionFromValue(filename || value);
   const candidate: MutableCandidate = {
     candidate_id: '',
     value,
@@ -215,6 +223,7 @@ function addObservation(
       ...(observation.metadata ?? {}),
       filename,
       extension,
+      ...resourceFamilyMetadata(filename || value),
       btih: btih || null,
       capture_provenance: [provenance]
     }
@@ -239,10 +248,14 @@ function resolveCandidateValue(raw: string): string | null {
 function candidateType(value: string): CandidateType {
   const lower = value.toLowerCase();
   if (lower.startsWith('magnet:')) return 'magnet';
-  if (/\.(mp4|m3u8|mkv|webm|avi|mov|mp3|flac|aac|wav|ogg)(?:[?#]|$)/i.test(lower)) return 'media';
-  if (/\.(png|jpe?g|gif|webp|svg|bmp)(?:[?#]|$)/i.test(lower)) return 'image';
-  if (/\.(zip|rar|7z|exe|msi|dmg|pkg|appimage|deb|rpm|tar|gz|xz|torrent|pdf)(?:[?#]|$)/i.test(lower)) return 'file';
-  if (/\.(html?|php|aspx?)(?:[?#]|$)/i.test(lower) || /\/$/.test(new URL(value).pathname)) return 'page';
+  const registered = candidateTypeFromResourceExtension(value);
+  if (registered) return registered;
+  try {
+    const pathname = new URL(value).pathname;
+    if (/\.(html?|php|aspx?)$/i.test(pathname) || /\/$/.test(pathname)) return 'page';
+  } catch {
+    // Keep unknown when the URL cannot be parsed here; the hard-drop resolver already ran.
+  }
   return 'unknown';
 }
 
@@ -264,11 +277,6 @@ function filenameFromValue(value: string): string | null {
   } catch {
     return null;
   }
-}
-
-function extensionFromFilename(filename: string): string | null {
-  const match = filename.toLowerCase().match(/\.([a-z0-9]{1,10})$/i);
-  return match?.[1] ?? null;
 }
 
 function selectedTextNodes(selectionRect: DomRect): Text[] {
