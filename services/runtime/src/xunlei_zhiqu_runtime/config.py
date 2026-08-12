@@ -12,7 +12,11 @@ class Settings(BaseSettings):
     model_base_url: str = "https://api.openai.com/v1"
     model_name: str = "gpt-4.1-mini"
     model_api_key: SecretStr | None = None
-    model_timeout_seconds: float = 30.0
+    # Stage C real-page analysis can legitimately take longer than a normal API call.
+    # Keep connect failures fast, but give the model enough time to read a 20-50 candidate EvidencePack.
+    model_connect_timeout_seconds: float = 10.0
+    model_read_timeout_seconds: float = 120.0
+    model_write_timeout_seconds: float = 30.0
     runtime_host: str = "127.0.0.1"
     runtime_port: int = 8765
     log_level: str = "INFO"
