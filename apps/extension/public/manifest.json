@@ -3,7 +3,7 @@
   "name": "迅雷智取 Lens",
   "version": "0.1.0",
   "description": "汇聚页面候选资源，并交给本地迅雷智取 Runtime 进行理解与选型。",
-  "permissions": ["sidePanel", "storage", "tabs", "activeTab"],
+  "permissions": ["sidePanel", "storage", "tabs", "activeTab", "scripting"],
   "host_permissions": [
     "http://127.0.0.1:8765/*",
     "http://localhost:8765/*",
