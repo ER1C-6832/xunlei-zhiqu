@@ -9,7 +9,7 @@
 - **Stage A：已完成** — Monorepo、三端可运行骨架、环境变量与 ModelProviderAdapter。
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
 - **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实 OpenAI-compatible 节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
-- **Stage D：进行中** — D1 已将普通用户界面从工程调试视图改为“资源名称 → 推荐下载 → 主要选择 → 开始下载”，并把网页标注收敛为少量“推荐”。D2 将继续做用户授权后的常驻本地自动发现与网页浮标。
+- **Stage D：进行中** — D1 已完成普通用户界面去工程化；D2 已加入用户可控的常驻本地资源发现、页面变化监听和网页资源数量浮标。主动扫描与框选只做本地候选采集，必须由用户再次点击“智能分析”才调用 LLM。
 - **Stage E：下一大阶段** — Stage D 完成后接入真实 Download Engine、真实进度和轻量质检。
 
 ## 当前已实现
@@ -20,13 +20,15 @@
 - 真实矩形框选 SelectionScope；
 - DOM href、选区纯文本 URL / Magnet、`video/audio/source` 基础采集；
 - 完全重复 URL / BTIH 合并与 capture provenance；
-- 自动扫描雏形（当前仍为主动触发，D2 将改成常驻本地发现）；
-- `CaptureBatch` → Runtime → 真实节点 A → `ResourcePlan`；
+- 主动“智能整理”和框选均先在本地采集候选，不自动调用模型；
+- 用户明确点击“智能分析”后才执行 `CaptureBatch` → Runtime → 真实节点 A → `ResourcePlan`；
+- D2 页面自动发现默认关闭；用户开启后使用 MutationObserver、滚动/视口变化做轻量本地资源计数，不构造 EvidencePack、不调用 LLM；
+- D2 在真实网页左下角显示圆形资源浮标与数量角标，点击只打开 Side Panel；
 - 用户修改推荐后以 `confirmed_item_ids` 创建 ResourceJob；
 - 本地 / 云盘交付目标；
 - ResourcePlan 可收藏到链接库；
 - 推荐结果可映射回真实网页；
-- D1 普通界面不再展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念；
+- 普通界面不展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念；
 - API Key 永远不进入扩展。
 
 ### Runtime `services/runtime`
@@ -53,12 +55,10 @@
 
 ## Stage D 当前边界
 
-D1 已完成用户界面去工程化。以下仍属于后续 D2-D6，不应误认为已完成：
+D1 与 D2 已完成当前 Demo 所需的用户界面简化和本地常驻发现。以下仍属于后续 D3-D6，不应误认为已完成：
 
-- 常驻 `MutationObserver` 自动发现；
-- 网页圆形迅雷智取浮标与高置信资源数字；
 - 完整资源扩展名 Registry 与 ResourceType 扩展；
-- 全 DOM 强信号自动发现；
+- 更强的全 DOM 资源发现与自动复杂度触发；
 - Network Media Capture、M3U8 / DASH；
 - `<img>` / `srcset` / `picture` / CSS background-image 与批量图片；
 - EvidenceReducer / EvidenceCompiler；
