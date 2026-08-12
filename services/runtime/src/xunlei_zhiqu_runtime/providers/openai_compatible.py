@@ -30,6 +30,7 @@ SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型�
 9. 尽量覆盖 EvidencePack 中所有有意义候选。用途和证据完全相同的附件可在一个 PlanItem 中引用多个 candidate_id；不得因为文件名相似就把不同候选当成同一资源。
 10. 输出要通俗且紧凑，避免对重复的签名、SBOM、校验附件逐项复述相同长文。
 11. 必须只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏或 JSON 之外的解释文字。
+12. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时必须输出 {}，绝不能输出 null、[]、字符串或其他类型。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
 
 输出单个 JSON 对象，只包含输出契约要求的业务字段。"""
 
@@ -49,7 +50,7 @@ OUTPUT_CONTRACT = {
         "plain_explanation": "plain-language explanation",
         "reason": "evidence-based reason",
         "role": "primary|attachment|alternative|excluded|unknown",
-        "technical_attributes": {"optional_fact": "primitive value or null"},
+        "technical_attributes": "JSON object<string, string|number|boolean|null>; use {} when empty; never array/null/string",
         "evidence_refs": ["optional evidence reference"],
     },
     "ScenarioRecommendation": {
@@ -205,6 +206,13 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         if not isinstance(parsed, dict):
             raise ModelProviderResponseError("模型 JSON 顶层必须是对象，不能是数组或纯文本。")
 
+        normalized_attributes = _normalize_empty_technical_attributes(parsed)
+        if normalized_attributes:
+            logger.info(
+                "node_a_normalized_empty_technical_attributes count=%d",
+                normalized_attributes,
+            )
+
         parsed["schema_version"] = "0.1"
         parsed["batch_id"] = evidence_pack.batch_id
         parsed["provider"] = self.name
@@ -233,6 +241,23 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             lines = lines[1:-1] if len(lines) >= 3 else lines
             return "\n".join(lines).strip()
         return stripped
+
+
+def _normalize_empty_technical_attributes(parsed: dict[str, object]) -> int:
+    """Normalize only semantically empty model variants; never coerce non-empty bad data."""
+    normalized = 0
+    for group_name in ("selected", "alternatives", "excluded", "uncertainties"):
+        items = parsed.get(group_name)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict) or "technical_attributes" not in item:
+                continue
+            value = item.get("technical_attributes")
+            if value is None or value == []:
+                item["technical_attributes"] = {}
+                normalized += 1
+    return normalized
 
 
 def _validation_summary(exc: ValidationError) -> str:
