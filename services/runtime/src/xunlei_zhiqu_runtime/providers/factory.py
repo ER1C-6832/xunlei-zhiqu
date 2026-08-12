@@ -17,6 +17,8 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             base_url=settings.model_base_url,
             api_key=key,
             model=settings.model_name,
-            timeout_seconds=settings.model_timeout_seconds,
+            connect_timeout_seconds=settings.model_connect_timeout_seconds,
+            read_timeout_seconds=settings.model_read_timeout_seconds,
+            write_timeout_seconds=settings.model_write_timeout_seconds,
         )
     raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
