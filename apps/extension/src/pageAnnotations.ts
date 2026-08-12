@@ -10,10 +10,12 @@ type AnnotationInfo = {
 
 const ROOT_ID = 'xunlei-zhiqu-plan-annotations';
 const POPOVER_ID = 'xunlei-zhiqu-plan-popover';
+const ANNOTATION_SELECTOR = '[data-xunlei-zhiqu-annotation="true"]';
 
 export function clearPlanAnnotations(): void {
   document.getElementById(ROOT_ID)?.remove();
   document.getElementById(POPOVER_ID)?.remove();
+  document.querySelectorAll<HTMLElement>(ANNOTATION_SELECTOR).forEach((element) => element.remove());
 }
 
 export function renderPlanAnnotations(batch: CaptureBatch, plan: ResourcePlan): number {
@@ -131,6 +133,7 @@ function appendFloatingBadge(
 function createBadge(candidateId: string, info: AnnotationInfo): HTMLButtonElement {
   const badge = document.createElement('button');
   badge.type = 'button';
+  badge.dataset.xunleiZhiquAnnotation = 'true';
   badge.dataset.xunleiZhiquCandidate = candidateId;
   badge.textContent = info.label;
   badge.title = `${info.item.label}：${info.item.plain_explanation}`;
