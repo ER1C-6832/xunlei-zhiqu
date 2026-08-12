@@ -2,8 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import './styles.css';
-import './stage-b.css';
-import './stage-c.css';
+import './stage-d.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

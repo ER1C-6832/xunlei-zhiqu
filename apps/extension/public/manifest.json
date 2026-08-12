@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "迅雷智取 Lens",
+  "name": "迅雷智取",
   "version": "0.1.0",
-  "description": "汇聚页面候选资源，并交给本地迅雷智取 Runtime 进行理解与选型。",
+  "description": "整理复杂下载页面中的版本、格式和附件，确认后交给本地迅雷智取任务中心。",
   "permissions": ["sidePanel", "storage", "tabs", "activeTab", "scripting"],
   "host_permissions": [
     "http://127.0.0.1:8765/*",

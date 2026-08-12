@@ -1,67 +1,70 @@
-# 迅雷智取 · Stage B complete
+# 迅雷智取
 
 > 单编排器、双智能节点、确定性执行的闭环资源交付 Agent。
 
-本仓库以 `docs/blueprint/xunlei-zhiqu-v0.4.md` 为当前产品和架构事实来源。阶段 A 与阶段 B 已完成；下一阶段进入 C：智能多选与候选融合。项目不会扩张为通用聊天助手、通用爬虫或纯链接下载器。
+本仓库以 `docs/blueprint/xunlei-zhiqu-v0.4.md` 为产品和架构事实来源。项目保持三层结构：Manifest V3 Browser Extension、本地 FastAPI Runtime、迅雷 17 风格 Task Center；不会扩张为通用聊天助手、通用爬虫或纯链接下载器。
+
+## 开发进度
+
+- **Stage A：已完成** — Monorepo、三端可运行骨架、环境变量与 ModelProviderAdapter。
+- **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
+- **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实 OpenAI-compatible 节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
+- **Stage D：进行中** — D1 已将普通用户界面从工程调试视图改为“资源名称 → 推荐下载 → 主要选择 → 开始下载”，并把网页标注收敛为少量“推荐”。D2 将继续做用户授权后的常驻本地自动发现与网页浮标。
+- **Stage E：下一大阶段** — Stage D 完成后接入真实 Download Engine、真实进度和轻量质检。
 
 ## 当前已实现
 
 ### 浏览器扩展 `apps/extension`
 
-- Chrome/Edge Manifest V3 Side Panel；
-- DOM 链接与文本 Magnet 初步采集；
-- `CaptureBatch` → Runtime → 节点 A → `ResourcePlan`；
-- 本地 / 云盘交付目的地选择；
-- 确认计划后创建 `ResourceJob`；
-- ResourcePlan 可直接“收藏到链接库”，不必先创建任务；
-- API Key 不进入扩展。
-
-### 任务中心 `apps/task-center`
-
-阶段 B 已按迅雷 17 下载模块方向完成高保真收口：
-
-- 飞鸟品牌标识；
-- 左侧只保留下载、云盘、链接库和设置；
-- 下载中 / 已完成；
-- 本地任务与云盘任务差异；
-- 智取任务、普通任务、异常任务；
-- Runtime 快照自动刷新；
-- 暂停 / 恢复写回 Runtime；
-- 可用的任务筛选、排序和批量暂停 / 恢复；
-- 右上角 Runtime 状态、通知、用户菜单；
-- 设置界面：刷新频率、列表密度、默认交付位置、通知和关于；
-- 新建普通下载任务（仅作为迅雷已有下载能力的任务中心入口）；
-- 任务详情明确呈现“目标、选择、问题、下一步”；
-- 链接库“收藏 / 历史”、分类筛选、列表 / 网格视图；
-- 历史记录可关联回 ResourceJob；
-- 收藏可在任务中心切换，也可直接从智取扩展创建。
+- Chrome / Edge Manifest V3 Side Panel；
+- 真实矩形框选 SelectionScope；
+- DOM href、选区纯文本 URL / Magnet、`video/audio/source` 基础采集；
+- 完全重复 URL / BTIH 合并与 capture provenance；
+- 自动扫描雏形（当前仍为主动触发，D2 将改成常驻本地发现）；
+- `CaptureBatch` → Runtime → 真实节点 A → `ResourcePlan`；
+- 用户修改推荐后以 `confirmed_item_ids` 创建 ResourceJob；
+- 本地 / 云盘交付目标；
+- ResourcePlan 可收藏到链接库；
+- 推荐结果可映射回真实网页；
+- D1 普通界面不再展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念；
+- API Key 永远不进入扩展。
 
 ### Runtime `services/runtime`
 
-- `GET /v1/health`
-- `POST /v1/capture/analyze`
-- `POST /v1/jobs`
-- `POST /v1/jobs/manual`
-- `GET /v1/jobs`
-- `GET /v1/jobs/{job_id}`
-- `POST /v1/jobs/{job_id}/pause`
-- `POST /v1/jobs/{job_id}/resume`
-- `GET /v1/link-library`
-- `GET /v1/link-history`（兼容入口）
-- `POST /v1/link-library/favorites`
-- `POST /v1/link-library/{history_id}/favorite`
-- 构建后的任务中心托管在 `/app/`。
+- FastAPI 本地服务，只监听本机；
+- `POST /v1/capture/analyze`；
+- Sanitized EvidencePack，Provider 不直接接收完整 CaptureBatch；
+- `OpenAICompatibleProvider` + 显式开发 `FixtureProvider`；
+- DashScope / DeepSeek V4 JSON Mode 兼容；
+- 模型只能引用已有 Candidate ID，返回后有确定性引用校验；
+- ResourceJob 创建、列表、暂停 / 恢复；
+- 链接库收藏 / 历史；
+- 当前 Job Store 仍为进程内轻量状态。
 
-当前 Job Store 仍为进程内轻量状态；这是阶段 B 的刻意边界。SQLite 持久化、真实 Download Engine、节点 B 与恢复系统不在本阶段提前实现。
+### 任务中心 `apps/task-center`
 
-## 尚未实现
+- 迅雷 17 风格下载主界面；
+- 下载中 / 已完成；
+- 本地与云盘 ResourceJob；
+- Runtime 任务快照刷新、暂停 / 恢复；
+- 任务详情中的目标、选择、问题、下一步；
+- 链接库收藏 / 历史；
+- Stage D 暂停继续扩张 Task Center UI，只保证能正确接收新 ResourceJob。
 
-- 阶段 C：DOM / 纯文本 / Magnet / 框选候选融合、去重、智能多选；
-- 完整 ResourceGraph 与持久状态机；
-- 真实 Download Engine、分块与协议执行；
-- 节点 B 与一键续取闭环；
-- 最终哈希 / 文件结构 / 完整性交付验证；
-- 第一版视觉模型。
+## Stage D 当前边界
+
+D1 已完成用户界面去工程化。以下仍属于后续 D2-D6，不应误认为已完成：
+
+- 常驻 `MutationObserver` 自动发现；
+- 网页圆形迅雷智取浮标与高置信资源数字；
+- 完整资源扩展名 Registry 与 ResourceType 扩展；
+- 全 DOM 强信号自动发现；
+- Network Media Capture、M3U8 / DASH；
+- `<img>` / `srcset` / `picture` / CSS background-image 与批量图片；
+- EvidenceReducer / EvidenceCompiler；
+- Token / latency / usage 日志与轻量 ResourcePlan 缓存。
+
+Stage D 不实现真实下载执行、BT 下载、SQLite、节点 B、完整 ResourceGraph、视觉模型或大量测试。
 
 ## 环境要求
 
@@ -79,7 +82,26 @@ uv sync --project services/runtime
 Copy-Item .env.example .env
 ```
 
-默认 `MODEL_PROVIDER=fixture`，无需 API Key。
+真实节点 A 默认使用 OpenAI-compatible Provider。API Key 只写 Runtime 本地 `.env`：
+
+```dotenv
+MODEL_PROVIDER=openai_compatible
+ENABLE_FIXTURE_PROVIDER=false
+MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MODEL_NAME=deepseek-v4-flash
+MODEL_API_KEY=your-local-runtime-key
+MODEL_CONNECT_TIMEOUT_SECONDS=10
+MODEL_READ_TIMEOUT_SECONDS=120
+MODEL_WRITE_TIMEOUT_SECONDS=30
+MODEL_MAX_COMPLETION_TOKENS=8192
+```
+
+Fixture 只能显式开发开启：
+
+```dotenv
+MODEL_PROVIDER=fixture
+ENABLE_FIXTURE_PROVIDER=true
+```
 
 ## 开发启动
 
@@ -95,37 +117,28 @@ uv run --project services/runtime uvicorn xunlei_zhiqu_runtime.main:app --app-di
 corepack pnpm --filter @xunlei-zhiqu/task-center dev
 ```
 
-浏览器扩展持续构建：
+扩展持续构建：
 
 ```powershell
 corepack pnpm --filter @xunlei-zhiqu/extension dev
 ```
 
-Chrome / Edge 加载目录：
+Chrome / Edge 旁加载目录：
 
 ```text
 apps/extension/dist
 ```
 
-也可以使用：
+## 拉取更新后的检查 / 构建
 
-```powershell
-.\scripts\dev.ps1
-```
-
-## 本地更新后的重构 / 构建
-
-阶段 B 不新增 npm 或 Python 第三方依赖。拉取代码后执行：
+Stage D 每一步优先保护生产代码构建，不追求测试覆盖率：
 
 ```powershell
 git pull --rebase origin main
-corepack pnpm typecheck
-corepack pnpm --filter @xunlei-zhiqu/task-center build
+corepack pnpm --filter @xunlei-zhiqu/extension typecheck
 corepack pnpm --filter @xunlei-zhiqu/extension build
 uv run --project services/runtime python -m compileall services/runtime/src
 ```
-
-然后重启 Runtime，并在浏览器扩展管理页点击“重新加载”。
 
 任务中心生产地址：
 
@@ -139,27 +152,14 @@ API 文档：
 http://127.0.0.1:8765/docs
 ```
 
-## OpenAI 兼容模型
-
-仅在 Runtime `.env` 中配置：
-
-```dotenv
-MODEL_PROVIDER=openai_compatible
-MODEL_BASE_URL=https://api.openai.com/v1
-MODEL_NAME=gpt-4.1-mini
-MODEL_API_KEY=your-local-runtime-key
-```
-
-API Key 不得写入 `apps/extension`、`apps/task-center`、任何前端环境变量或 GitHub。
-
 ## 目录
 
 ```text
-apps/extension          Manifest V3 迅雷智取 Lens
+apps/extension          Manifest V3 迅雷智取扩展
 apps/task-center        迅雷 17 风格 React 任务中心
 services/runtime        FastAPI 本地 Runtime
-packages/contracts      临时跨模块 TypeScript 契约
+packages/contracts      最小跨模块 TypeScript 契约
 docs/blueprint          当前产品和架构事实来源
 docs/adr                只记录高成本决策
-demo                    后续受控资源页与故障场景
+demo                    受控资源页与故障场景
 ```

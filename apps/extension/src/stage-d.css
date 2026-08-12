@@ -1,0 +1,424 @@
+.zhiqu-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 14px 24px;
+  overflow-x: hidden;
+  color: #182235;
+  background: #f5f7fb;
+}
+
+.zhiqu-shell * { box-sizing: border-box; }
+
+.zhiqu-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 4px 2px 8px;
+  background: rgba(245, 247, 251, .96);
+  backdrop-filter: blur(10px);
+}
+
+.zhiqu-header strong {
+  font-size: 17px;
+  font-weight: 750;
+  letter-spacing: -.01em;
+}
+
+.zhiqu-logo {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: #fff;
+  background: #1677ff;
+  box-shadow: 0 6px 16px rgba(22, 119, 255, .2);
+}
+
+.zhiqu-start-card,
+.zhiqu-result {
+  border: 1px solid #e3e8ef;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 26px rgba(30, 55, 90, .06);
+}
+
+.zhiqu-start-card {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+}
+
+.zhiqu-start-copy h1 {
+  margin: 0 0 7px;
+  font-size: 19px;
+  line-height: 1.35;
+}
+
+.zhiqu-start-copy p {
+  margin: 0;
+  color: #667386;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.zhiqu-start-actions {
+  display: grid;
+  gap: 9px;
+}
+
+.zhiqu-primary,
+.zhiqu-secondary,
+.zhiqu-download,
+.zhiqu-favorite,
+.zhiqu-reselect {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, box-shadow .18s ease, opacity .18s ease;
+}
+
+.zhiqu-primary,
+.zhiqu-download {
+  border: 1px solid #1677ff;
+  color: #fff;
+  background: #1677ff;
+  box-shadow: 0 7px 18px rgba(22, 119, 255, .18);
+}
+
+.zhiqu-primary:hover,
+.zhiqu-download:hover { background: #0f68e8; }
+
+.zhiqu-secondary,
+.zhiqu-favorite,
+.zhiqu-reselect {
+  border: 1px solid #d9e1eb;
+  color: #3e526d;
+  background: #fff;
+}
+
+.zhiqu-secondary:hover,
+.zhiqu-favorite:hover,
+.zhiqu-reselect:hover { background: #f7faff; border-color: #b9d2f3; }
+
+.zhiqu-working {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 15px;
+  border-radius: 12px;
+  color: #315f9d;
+  background: #eef5ff;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.zhiqu-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px 13px;
+  border: 1px solid #f0c77e;
+  border-radius: 11px;
+  color: #875611;
+  background: #fff8e9;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.zhiqu-error svg { flex: 0 0 auto; margin-top: 1px; }
+
+.zhiqu-result {
+  position: relative;
+  padding: 17px;
+}
+
+.zhiqu-resource-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.zhiqu-resource-heading > div { min-width: 0; }
+.zhiqu-resource-heading > svg { flex: 0 0 auto; color: #15a06c; margin-top: 2px; }
+
+.zhiqu-resource-heading h1 {
+  margin: 0 0 7px;
+  overflow-wrap: anywhere;
+  color: #172033;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.zhiqu-resource-heading p {
+  margin: 0;
+  color: #5d697b;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.zhiqu-page-note {
+  margin: 12px 0 2px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  color: #2d664d;
+  background: #eef9f3;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.zhiqu-recommended {
+  margin-top: 17px;
+}
+
+.zhiqu-recommended h2 {
+  margin: 0 0 9px;
+  color: #172033;
+  font-size: 16px;
+}
+
+.zhiqu-choice {
+  width: 100%;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  margin: 0 0 8px;
+  padding: 12px;
+  border: 1px solid #e1e7ee;
+  border-radius: 12px;
+  color: inherit;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zhiqu-choice:hover { border-color: #b9d1f1; background: #fafcff; }
+.zhiqu-choice.selected { border-color: #79aff5; background: #f2f7ff; }
+.zhiqu-choice.recommended { box-shadow: inset 3px 0 0 #1677ff; }
+
+.zhiqu-check {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+  border: 1.5px solid #b8c2cf;
+  border-radius: 6px;
+  color: #fff;
+  background: #fff;
+}
+
+.zhiqu-choice.selected .zhiqu-check { border-color: #1677ff; background: #1677ff; }
+
+.zhiqu-choice-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.zhiqu-choice-copy > strong {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #1d293c;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.zhiqu-choice-copy strong em {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #166bd5;
+  background: #e8f2ff;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.zhiqu-choice-copy p {
+  margin: 0;
+  color: #566477;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.zhiqu-choice-copy small {
+  color: #2b6fbc;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.zhiqu-no-recommendation,
+.zhiqu-muted-help {
+  margin: 0;
+  color: #778396;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.zhiqu-delivery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 13px;
+  padding: 10px 0 0;
+  border-top: 1px solid #edf0f4;
+}
+
+.zhiqu-delivery > span {
+  color: #566477;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.zhiqu-delivery-options {
+  display: flex;
+  gap: 6px;
+}
+
+.zhiqu-delivery-options button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid #dfe5ed;
+  border-radius: 9px;
+  color: #637084;
+  background: #fff;
+  cursor: pointer;
+}
+
+.zhiqu-delivery-options button.active {
+  border-color: #83b7f7;
+  color: #166bd5;
+  background: #eef5ff;
+}
+
+.zhiqu-action-bar {
+  position: sticky;
+  bottom: 8px;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  margin: 12px 0 14px;
+  padding: 8px;
+  border: 1px solid #d9e4f0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 9px 25px rgba(39, 71, 113, .13);
+  backdrop-filter: blur(10px);
+}
+
+.zhiqu-favorite { min-width: 88px; padding: 0 11px; }
+.zhiqu-download { width: 100%; padding: 0 16px; }
+
+.zhiqu-groups {
+  display: grid;
+  gap: 8px;
+}
+
+.zhiqu-group {
+  overflow: hidden;
+  border: 1px solid #e4e9f0;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.zhiqu-group-toggle {
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 0;
+  color: #344256;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zhiqu-group-toggle:hover { background: #f8fbff; }
+.zhiqu-group-toggle strong { font-size: 14px; }
+.zhiqu-group-toggle b {
+  min-width: 28px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #3f6ea7;
+  background: #eef3f8;
+  font-size: 11px;
+  text-align: center;
+}
+
+.zhiqu-group-body {
+  padding: 9px 10px 3px;
+  border-top: 1px solid #edf0f4;
+}
+
+.zhiqu-group-body .zhiqu-muted-help { margin: 0 2px 9px; }
+.zhiqu-all-resources .zhiqu-group-toggle { color: #697588; }
+
+.zhiqu-reselect {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.zhiqu-success {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  color: #276448;
+  background: #eef9f3;
+  font-size: 12px;
+}
+
+.zhiqu-success button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  color: #176bd3;
+  background: transparent;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.zhiqu-shell button:disabled { opacity: .5; cursor: default; }
+.zhiqu-shell button:focus-visible { outline: 3px solid rgba(22, 119, 255, .25); outline-offset: 2px; }
+
+@media (max-width: 390px) {
+  .zhiqu-shell { padding-inline: 10px; }
+  .zhiqu-result, .zhiqu-start-card { padding: 14px; }
+  .zhiqu-action-bar { grid-template-columns: 1fr; }
+  .zhiqu-favorite { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zhiqu-shell * { scroll-behavior: auto !important; transition: none !important; }
+}
