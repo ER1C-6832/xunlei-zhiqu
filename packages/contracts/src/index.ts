@@ -7,7 +7,19 @@ export type CaptureChannel =
   | 'image'
   | 'manual';
 export type DeliveryTarget = 'local' | 'cloud';
-export type ResourceType = 'software' | 'video' | 'audio' | 'image' | 'archive' | 'mixed' | 'unknown';
+export type ResourceType =
+  | 'software'
+  | 'document'
+  | 'video'
+  | 'audio'
+  | 'image'
+  | 'subtitle'
+  | 'model'
+  | 'design'
+  | 'archive'
+  | 'disk_image'
+  | 'mixed'
+  | 'unknown';
 
 export interface DomRect {
   x: number;
