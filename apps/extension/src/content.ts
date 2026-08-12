@@ -1,121 +1,143 @@
-import type {
-  CaptureBatch,
-  CapturedResourceCandidate,
-  CandidateType
-} from '@xunlei-zhiqu/contracts';
+import type { DomRect } from '@xunlei-zhiqu/contracts';
+import { buildCaptureBatchFromRect } from './capture';
 
-const MAX_CANDIDATES = 80;
+type CaptureResponse =
+  | { ok: true; batch: ReturnType<typeof buildCaptureBatchFromRect> }
+  | { ok: false; error: string };
 
-function candidateType(value: string): CandidateType {
-  const lower = value.toLowerCase();
-  if (lower.startsWith('magnet:')) return 'magnet';
-  if (/\.(mp4|m3u8|mkv|webm)(\?|#|$)/i.test(lower)) return 'media';
-  if (/\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(lower)) return 'image';
-  if (/\.(html?|php|aspx?)(\?|#|$)/i.test(lower) || lower.endsWith('/')) return 'page';
-  if (/\.(zip|rar|7z|exe|msi|dmg|pkg|appimage|tar|gz|flac|mp3|aac|torrent)(\?|#|$)/i.test(lower)) {
-    return 'file';
-  }
-  return 'unknown';
-}
+let activeCleanup: (() => void) | null = null;
 
-function normalizeUrl(value: string): string {
-  if (value.startsWith('magnet:')) return value;
-  try {
-    const url = new URL(value, window.location.href);
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return value;
-  }
-}
+function startRectangleSelection(
+  tabId: number | undefined,
+  sendResponse: (response: CaptureResponse) => void
+): void {
+  activeCleanup?.();
 
-function nearbyText(element: Element): string {
-  const raw = element.parentElement?.innerText || element.textContent || '';
-  return raw.replace(/\s+/g, ' ').trim().slice(0, 240);
-}
+  const overlay = document.createElement('div');
+  overlay.id = 'xunlei-zhiqu-selection-overlay';
+  Object.assign(overlay.style, {
+    position: 'fixed',
+    inset: '0',
+    zIndex: '2147483646',
+    cursor: 'crosshair',
+    background: 'rgba(26, 104, 220, 0.035)',
+    userSelect: 'none',
+    touchAction: 'none'
+  });
 
-function rectFor(element: Element) {
-  const rect = element.getBoundingClientRect();
-  return {
-    x: Math.round(rect.x),
-    y: Math.round(rect.y),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height)
+  const hint = document.createElement('div');
+  hint.textContent = '迅雷智取：拖拽框选资源区域 · Esc 取消';
+  Object.assign(hint.style, {
+    position: 'fixed',
+    top: '18px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    padding: '10px 16px',
+    borderRadius: '10px',
+    color: '#fff',
+    background: 'rgba(25,31,42,.88)',
+    font: '600 14px/1.4 Microsoft YaHei UI, system-ui, sans-serif',
+    boxShadow: '0 8px 28px rgba(0,0,0,.18)'
+  });
+
+  const box = document.createElement('div');
+  Object.assign(box.style, {
+    position: 'fixed',
+    display: 'none',
+    border: '2px solid #2478ee',
+    borderRadius: '5px',
+    background: 'rgba(36,120,238,.12)',
+    boxShadow: '0 0 0 1px rgba(255,255,255,.7) inset'
+  });
+
+  overlay.append(hint, box);
+  document.documentElement.appendChild(overlay);
+
+  let startX = 0;
+  let startY = 0;
+  let dragging = false;
+  let responded = false;
+
+  const cleanup = () => {
+    overlay.remove();
+    window.removeEventListener('keydown', onKeyDown, true);
+    activeCleanup = null;
   };
-}
-
-function buildBatch(tabId?: number): CaptureBatch {
-  const values = new Map<string, CapturedResourceCandidate>();
-  const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'));
-
-  for (const anchor of anchors) {
-    const value = normalizeUrl(anchor.href);
-    if (!value || values.has(value)) continue;
-    const type = candidateType(value);
-    const label = anchor.textContent?.replace(/\s+/g, ' ').trim() || null;
-    values.set(value, {
-      candidate_id: `c_${values.size + 1}`,
-      value,
-      candidate_type: type,
-      capture_channel: 'dom_link',
-      page_url: window.location.href,
-      display_name: decodeURIComponent(value.split('/').pop()?.split('?')[0] || '') || label,
-      anchor_text: label,
-      nearby_text: nearbyText(anchor),
-      dom_rect: rectFor(anchor),
-      normalized_key: value,
-      probe_status: 'pending'
-    });
-    if (values.size >= MAX_CANDIDATES) break;
-  }
-
-  const pageText = document.body.innerText.slice(0, 20_000);
-  const magnetMatches = pageText.match(/magnet:\?xt=urn:btih:[a-zA-Z0-9]+[^\s"'<>]*/g) || [];
-  for (const magnet of magnetMatches) {
-    const value = normalizeUrl(magnet);
-    if (values.has(value) || values.size >= MAX_CANDIDATES) continue;
-    values.set(value, {
-      candidate_id: `c_${values.size + 1}`,
-      value,
-      candidate_type: 'magnet',
-      capture_channel: 'selected_text',
-      page_url: window.location.href,
-      display_name: 'Magnet 资源',
-      nearby_text: '从页面纯文本中发现的 Magnet。',
-      normalized_key: value,
-      probe_status: 'skipped'
-    });
-  }
-
-  const candidates = Array.from(values.values());
-  return {
-    schema_version: '0.1',
-    batch_id: `batch_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`,
-    tab_id: tabId ?? null,
-    trigger: 'manual',
-    page: {
-      url: window.location.href,
-      title: document.title,
-      relevant_text: Array.from(document.querySelectorAll('h1, h2, h3'))
-        .map((heading) => heading.textContent?.replace(/\s+/g, ' ').trim())
-        .filter((value): value is string => Boolean(value))
-        .slice(0, 20)
-    },
-    selection: {
-      type: 'manual',
-      candidate_ids: candidates.map((candidate) => candidate.candidate_id)
-    },
-    device: {
-      os: /Win/i.test(navigator.platform) ? 'windows' : /Mac/i.test(navigator.platform) ? 'macos' : 'unknown',
-      arch: 'unknown',
-      locale: navigator.language || 'zh-CN'
-    },
-    candidates
+  const finish = (response: CaptureResponse) => {
+    if (responded) return;
+    responded = true;
+    cleanup();
+    sendResponse(response);
   };
+  const updateBox = (x: number, y: number) => {
+    const left = Math.min(startX, x);
+    const top = Math.min(startY, y);
+    const width = Math.abs(x - startX);
+    const height = Math.abs(y - startY);
+    Object.assign(box.style, {
+      display: 'block',
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${width}px`,
+      height: `${height}px`
+    });
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') finish({ ok: false, error: '已取消智能框选' });
+  };
+
+  overlay.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    dragging = true;
+    startX = event.clientX;
+    startY = event.clientY;
+    overlay.setPointerCapture(event.pointerId);
+    updateBox(event.clientX, event.clientY);
+    event.preventDefault();
+  });
+
+  overlay.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    updateBox(event.clientX, event.clientY);
+    event.preventDefault();
+  });
+
+  overlay.addEventListener('pointerup', (event) => {
+    if (!dragging) return;
+    dragging = false;
+    const rect: DomRect = {
+      x: Math.min(startX, event.clientX),
+      y: Math.min(startY, event.clientY),
+      width: Math.abs(event.clientX - startX),
+      height: Math.abs(event.clientY - startY)
+    };
+    if (rect.width < 8 || rect.height < 8) {
+      finish({ ok: false, error: '框选范围太小，请覆盖实际资源区域' });
+      return;
+    }
+
+    overlay.style.display = 'none';
+    requestAnimationFrame(() => {
+      try {
+        const batch = buildCaptureBatchFromRect(rect, tabId);
+        if (!batch.candidates.length) finish({ ok: false, error: '框选区域内没有发现候选资源' });
+        else finish({ ok: true, batch });
+      } catch (error) {
+        finish({ ok: false, error: error instanceof Error ? error.message : '框选采集失败' });
+      }
+    });
+  });
+
+  window.addEventListener('keydown', onKeyDown, true);
+  activeCleanup = cleanup;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'XUNLEI_ZHIQU_CAPTURE') return false;
-  sendResponse({ ok: true, batch: buildBatch(message.tabId) });
-  return false;
+  if (
+    message?.type !== 'XUNLEI_ZHIQU_START_SELECTION'
+    && message?.type !== 'XUNLEI_ZHIQU_CAPTURE'
+  ) return false;
+
+  startRectangleSelection(typeof message.tabId === 'number' ? message.tabId : undefined, sendResponse);
+  return true;
 });
