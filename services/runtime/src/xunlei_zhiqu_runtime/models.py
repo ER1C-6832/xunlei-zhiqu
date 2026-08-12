@@ -82,9 +82,32 @@ class CaptureBatch(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class EvidenceCandidate(BaseModel):
+    id: str
+    candidate_type: Literal["file", "magnet", "media", "image", "page", "unknown"]
+    display_name: str | None = None
+    filename: str | None = None
+    extension: str | None = None
+    anchor_text: str | None = None
+    nearby_text: str | None = None
+    section_heading: str | None = None
+    selection_overlap: float | None = Field(default=None, ge=0, le=1)
+    capture_provenance: list[dict[str, str | None]] = Field(default_factory=list)
+    technical_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class EvidencePack(BaseModel):
+    schema_version: Literal["0.1"] = "0.1"
+    batch_id: str
+    page: dict[str, Any]
+    selection: dict[str, Any] | None = None
+    device: dict[str, Any] | None = None
+    candidates: list[EvidenceCandidate]
+
+
 class PlanItem(BaseModel):
     item_id: str
-    candidate_ids: list[str]
+    candidate_ids: list[str] = Field(min_length=1)
     label: str
     plain_explanation: str
     reason: str
@@ -117,6 +140,7 @@ class ResourcePlan(BaseModel):
 class ResourceJobCreateRequest(BaseModel):
     schema_version: Literal["0.1"] = "0.1"
     plan: ResourcePlan
+    confirmed_item_ids: list[str] = Field(min_length=1)
     capture: CaptureBatch | None = None
     delivery_target: DeliveryTarget = "local"
     destination: str | None = None
