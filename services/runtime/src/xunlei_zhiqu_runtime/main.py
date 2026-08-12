@@ -20,6 +20,11 @@ from xunlei_zhiqu_runtime.models import (
     ResourceJobSnapshot,
     ResourcePlan,
 )
+from xunlei_zhiqu_runtime.providers.base import (
+    ModelProviderRequestError,
+    ModelProviderResponseError,
+    ModelProviderTimeoutError,
+)
 from xunlei_zhiqu_runtime.providers.factory import create_provider
 from xunlei_zhiqu_runtime.services.analyzer import CaptureAnalyzer
 from xunlei_zhiqu_runtime.services.confirmation import compile_confirmed_request
@@ -75,7 +80,28 @@ async def health(request: Request) -> HealthResponse:
 
 @app.post("/v1/capture/analyze", response_model=ResourcePlan)
 async def analyze_capture(batch: CaptureBatch, request: Request) -> ResourcePlan:
-    return await request.app.state.analyzer.analyze(batch)
+    try:
+        return await request.app.state.analyzer.analyze(batch)
+    except ModelProviderTimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={"code": "model_timeout", "message": str(exc), "retryable": True},
+        ) from exc
+    except ModelProviderRequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "model_request_failed", "message": str(exc), "retryable": True},
+        ) from exc
+    except ModelProviderResponseError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "invalid_model_response", "message": str(exc), "retryable": True},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "invalid_resource_plan", "message": str(exc), "retryable": True},
+        ) from exc
 
 
 @app.post("/v1/jobs", response_model=ResourceJobSnapshot)
