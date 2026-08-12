@@ -105,6 +105,7 @@ export interface ResourcePlan {
 export interface ResourceJobCreateRequest {
   schema_version: '0.1';
   plan: ResourcePlan;
+  confirmed_item_ids: string[];
   capture?: CaptureBatch | null;
   delivery_target?: DeliveryTarget;
   destination?: string | null;
