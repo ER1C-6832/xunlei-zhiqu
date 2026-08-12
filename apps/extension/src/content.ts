@@ -3,6 +3,12 @@ import { buildAutomaticCaptureBatch } from './autoCapture';
 import { buildCaptureBatchFromRect } from './capture';
 import { enrichFusedCandidateMetadata } from './captureEnrichment';
 import { clearPlanAnnotations, focusCandidate, renderPlanAnnotations } from './pageAnnotations';
+import {
+  applyPersistentDiscoveryEnabled,
+  getPersistentDiscoveryState,
+  initializePersistentDiscovery,
+  refreshPersistentDiscovery
+} from './persistentDiscovery';
 
 type CaptureResponse =
   | { ok: true; batch: CaptureBatch }
@@ -179,5 +185,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (message?.type === 'XUNLEI_ZHIQU_SET_AUTO_DISCOVERY') {
+    const state = applyPersistentDiscoveryEnabled(Boolean(message.enabled));
+    sendResponse({ ok: true, state: message.enabled ? refreshPersistentDiscovery() : state });
+    return false;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_DISCOVERY_STATUS') {
+    sendResponse({ ok: true, state: getPersistentDiscoveryState() });
+    return false;
+  }
+
   return false;
 });
+
+void initializePersistentDiscovery();
