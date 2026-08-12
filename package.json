@@ -4,10 +4,10 @@
   "private": true,
   "packageManager": "pnpm@10.14.0",
   "scripts": {
-    "dev:extension": "pnpm --filter @xunlei-zhiqu/extension dev",
-    "dev:task-center": "pnpm --filter @xunlei-zhiqu/task-center dev",
-    "dev:web": "pnpm --parallel --filter @xunlei-zhiqu/extension --filter @xunlei-zhiqu/task-center dev",
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "dev:extension": "corepack pnpm --filter @xunlei-zhiqu/extension dev",
+    "dev:task-center": "corepack pnpm --filter @xunlei-zhiqu/task-center dev",
+    "dev:web": "corepack pnpm --parallel --filter @xunlei-zhiqu/extension --filter @xunlei-zhiqu/task-center dev",
+    "build": "corepack pnpm -r build",
+    "typecheck": "corepack pnpm -r typecheck"
   }
 }
