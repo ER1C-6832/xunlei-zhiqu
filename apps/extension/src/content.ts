@@ -1,5 +1,5 @@
 import type { CaptureBatch, DomRect, ResourcePlan } from '@xunlei-zhiqu/contracts';
-import { buildAutomaticCaptureBatch } from './autoCapture';
+import { buildAutomaticCaptureBatch, buildFullPageCaptureBatch } from './autoCapture';
 import { buildCaptureBatchFromRect } from './capture';
 import { enrichFusedCandidateMetadata } from './captureEnrichment';
 import { clearPlanAnnotations, focusCandidate, renderPlanAnnotations } from './pageAnnotations';
@@ -148,11 +148,25 @@ function runAutomaticScan(tabId: number | undefined): CaptureResponse {
   try {
     const batch = enrichFusedCandidateMetadata(buildAutomaticCaptureBatch(tabId));
     if (!batch.candidates.length) {
-      return { ok: false, error: '当前可见区域没有发现明显的文件、媒体、Magnet 或下载入口；可改用智能框选。' };
+      return { ok: false, error: '当前可见区域没有发现明显的文件、媒体、Magnet 或下载入口；可改用框选或整个网页。' };
     }
     return { ok: true, batch };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : '自动扫描失败' };
+  }
+}
+
+function runFullPageScan(tabId: number | undefined): CaptureResponse {
+  activeCleanup?.();
+  clearPlanAnnotations();
+  try {
+    const batch = enrichFusedCandidateMetadata(buildFullPageCaptureBatch(tabId));
+    if (!batch.candidates.length) {
+      return { ok: false, error: '整个网页没有发现明显的文件、媒体、Magnet 或下载入口。' };
+    }
+    return { ok: true, batch };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : '整个网页扫描失败' };
   }
 }
 
@@ -191,8 +205,9 @@ function runPersistentDiscoveryCapture(tabId: number | undefined): CaptureRespon
         candidates,
         metadata: {
           ...(base.metadata || {}),
-          capture_version: 'stage-d.2',
+          capture_version: 'stage-d.3',
           automatic_scan: 'persistent_discovery_visible_high_confidence',
+          capture_scope: 'viewport',
           discovery_count: discovery.count
         }
       }
@@ -216,6 +231,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'XUNLEI_ZHIQU_AUTO_SCAN') {
     sendResponse(runAutomaticScan(typeof message.tabId === 'number' ? message.tabId : undefined));
+    return false;
+  }
+
+  if (message?.type === 'XUNLEI_ZHIQU_FULL_PAGE_SCAN') {
+    sendResponse(runFullPageScan(typeof message.tabId === 'number' ? message.tabId : undefined));
     return false;
   }
 
