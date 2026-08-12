@@ -64,10 +64,7 @@ export function StageCExtensionApp() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) throw new Error('未找到当前标签页');
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        type: 'XUNLEI_ZHIQU_START_SELECTION',
-        tabId: tab.id
-      });
+      const response = await requestRectangleSelection(tab.id);
       if (!response?.ok) throw new Error(response?.error || '框选采集失败');
       if (!response.batch?.candidates?.length) throw new Error('框选区域内没有发现候选资源');
       setBatch(response.batch as CaptureBatch);
@@ -320,6 +317,38 @@ function groupLabel(group: PlanGroupKey): string {
 function scenarioLabel(scenario: string): string {
   return ({ current_device: '当前设备', compatibility: '兼容优先', quality: '质量优先', small_size: '体积优先', manual: '手动选择' } as Record<string, string>)[scenario] || scenario;
 }
+
+async function requestRectangleSelection(tabId: number) {
+  const message = { type: 'XUNLEI_ZHIQU_START_SELECTION', tabId };
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    if (!isMissingContentScriptError(error)) throw error;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content.js']
+      });
+    } catch (injectionError) {
+      const detail = injectionError instanceof Error ? injectionError.message : String(injectionError);
+      throw new Error(`当前页面尚未连接迅雷智取，自动注入失败：${detail}`);
+    }
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (retryError) {
+      const detail = retryError instanceof Error ? retryError.message : String(retryError);
+      throw new Error(`已重新注入网页采集脚本，但仍无法开始智能框选：${detail}`);
+    }
+  }
+}
+
+function isMissingContentScriptError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Receiving end does not exist')
+    || message.includes('Could not establish connection')
+    || message.includes('The message port closed before a response was received');
+}
+
 async function runtimeError(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json() as { detail?: string };
