@@ -125,7 +125,7 @@ class PlanItem(BaseModel):
     plain_explanation: str
     reason: str
     role: Literal["primary", "attachment", "alternative", "excluded", "unknown"]
-    technical_attributes: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    technical_attributes: dict[str, Any] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
 
 
