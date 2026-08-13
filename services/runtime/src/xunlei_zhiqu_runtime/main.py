@@ -39,6 +39,7 @@ from xunlei_zhiqu_runtime.services.job_store import (
     resume_job,
     set_favorite,
 )
+from xunlei_zhiqu_runtime.services.plan_cache import ResourcePlanCache
 
 
 @asynccontextmanager
@@ -47,7 +48,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider = create_provider(settings)
     app.state.settings = settings
     app.state.provider = provider
-    app.state.analyzer = CaptureAnalyzer(provider)
+    app.state.plan_cache = ResourcePlanCache(
+        ttl_seconds=settings.plan_cache_ttl_seconds,
+        max_entries=settings.plan_cache_max_entries,
+    )
+    app.state.analyzer = CaptureAnalyzer(provider, cache=app.state.plan_cache)
     yield
     await provider.aclose()
 
