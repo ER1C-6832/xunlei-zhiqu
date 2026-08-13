@@ -6,6 +6,11 @@ from xunlei_zhiqu_runtime.providers.base import ModelProviderAdapter
 from xunlei_zhiqu_runtime.providers.evidence_wire import EvidenceWireProvider
 from xunlei_zhiqu_runtime.providers.fixture import FixtureProvider
 from xunlei_zhiqu_runtime.providers.openai_compatible import OpenAICompatibleProvider
+from xunlei_zhiqu_runtime.providers.output_wire import (
+    WIRE2_OUTPUT_CONTRACT,
+    WIRE2_SYSTEM_SUFFIX,
+    expand_compact_resource_plan,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -13,6 +18,7 @@ logger = logging.getLogger("uvicorn.error")
 _BASE_SYSTEM_PROMPT = openai_compatible.SYSTEM_PROMPT
 _BASE_OUTPUT_CONTRACT = openai_compatible.OUTPUT_CONTRACT
 _BASE_PROMPT_VERSION = openai_compatible.PROMPT_VERSION
+_BASE_NORMALIZER = openai_compatible._normalize_model_resource_plan
 
 # Fast is a separate compact prompt, not a suffix appended to the quality prompt.
 # It deliberately keeps all evidence and all deterministic correctness constraints.
@@ -93,6 +99,11 @@ _COMPACT_OUTPUT_CONTRACT = {
 }
 
 
+def _wire2_normalizer(parsed: dict[str, object]) -> dict[str, int]:
+    expand_compact_resource_plan(parsed)
+    return _BASE_NORMALIZER(parsed)
+
+
 def create_provider(settings: Settings) -> ModelProviderAdapter:
     if settings.model_provider == "fixture":
         if not settings.enable_fixture_provider:
@@ -103,6 +114,9 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
     if settings.model_provider == "openai_compatible":
         key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
         use_wire = False
+        # create_provider can be called repeatedly in tests/reload paths; always
+        # restore the normal full-key normalizer before selecting an A/B profile.
+        openai_compatible._normalize_model_resource_plan = _BASE_NORMALIZER
 
         if settings.node_a_profile == "fast":
             openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
@@ -110,11 +124,21 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             openai_compatible.PROMPT_VERSION = "stage-d6-fast-v2"
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
         elif settings.node_a_profile == "wire":
-            # Same prompt, output contract, evidence groups and output ceiling as
-            # fast-v2. Only the model-facing EvidencePack transport is compacted.
+            # Cost baseline: fast-v2 prompt/output + lossless model-facing evidence compaction.
             openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
             openai_compatible.OUTPUT_CONTRACT = _FAST_OUTPUT_CONTRACT
             openai_compatible.PROMPT_VERSION = "stage-d6-wire-v1"
+            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+            use_wire = True
+        elif settings.node_a_profile == "wire2":
+            # Continue A/B from wire-v1: keep the same evidence compaction and
+            # correctness prompt, but ask the model to emit short transport keys.
+            # Runtime expands them back to the canonical ResourcePlan before the
+            # existing normalizer, Pydantic validation and deterministic checks.
+            openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE2_SYSTEM_SUFFIX}"
+            openai_compatible.OUTPUT_CONTRACT = WIRE2_OUTPUT_CONTRACT
+            openai_compatible.PROMPT_VERSION = "stage-d6-wire2-v1"
+            openai_compatible._normalize_model_resource_plan = _wire2_normalizer
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
             use_wire = True
         elif settings.node_a_profile == "compact":
