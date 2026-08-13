@@ -89,9 +89,12 @@ def reduce_evidence_candidates(
 
 def _compact_candidate(candidate: EvidenceCandidate) -> EvidenceCandidate:
     metadata = _compact_metadata(candidate.technical_metadata)
-    candidate_ids = _unique_strings(candidate.candidate_ids or [candidate.id])
-    if candidate.id not in candidate_ids:
-        candidate_ids.insert(0, candidate.id)
+    # A normal EvidenceCandidate already has a unique `id`; repeating the same ID
+    # in candidate_ids wastes prompt space. candidate_ids is reserved for reducer
+    # groups that represent multiple original candidates.
+    candidate_ids = _unique_strings(candidate.candidate_ids)
+    if candidate_ids == [candidate.id]:
+        candidate_ids = []
 
     return candidate.model_copy(
         update={
