@@ -1,8 +1,9 @@
 import json
 import logging
+import re
 import time
 
-from xunlei_zhiqu_runtime.models import CaptureBatch, EvidencePack, ResourcePlan
+from xunlei_zhiqu_runtime.models import CaptureBatch, EvidenceCandidate, EvidencePack, ResourcePlan
 from xunlei_zhiqu_runtime.providers.base import ModelProviderAdapter
 from xunlei_zhiqu_runtime.services.evidence import compile_evidence_pack
 from xunlei_zhiqu_runtime.services.plan_cache import ResourcePlanCache
@@ -21,7 +22,7 @@ class CaptureAnalyzer:
         self._provider = provider
         self._cache = cache
 
-    async def analyze(self, batch: CaptureBatch) -> ResourcePlan:
+    async def analyze(self, batch: CaptureBatch, *, force_refresh: bool = False) -> ResourcePlan:
         started = time.perf_counter()
         compiled = compile_evidence_pack(batch)
         evidence_pack = compiled.pack
@@ -39,23 +40,27 @@ class CaptureAnalyzer:
                 evidence_pack,
                 namespace=self._provider.cache_namespace,
             )
-            cached_plan = self._cache.get(cache_key, batch_id=evidence_pack.batch_id)
-            if cached_plan is not None:
-                _validate_plan_references(cached_plan, evidence_pack)
-                self._log_analysis(
-                    compiled=compiled.stats,
-                    evidence_chars=evidence_chars,
-                    input_tokens=0,
-                    output_tokens=0,
-                    cached_tokens=0,
-                    cache_hit=True,
-                    latency_ms=int((time.perf_counter() - started) * 1000),
-                )
-                return cached_plan
+            if not force_refresh:
+                cached_plan = self._cache.get(cache_key, batch_id=evidence_pack.batch_id)
+                if cached_plan is not None:
+                    _validate_plan_references(cached_plan, evidence_pack)
+                    _validate_recommendation_quality(cached_plan, evidence_pack)
+                    self._log_analysis(
+                        compiled=compiled.stats,
+                        evidence_chars=evidence_chars,
+                        input_tokens=0,
+                        output_tokens=0,
+                        cached_tokens=0,
+                        cache_hit=True,
+                        force_refresh=False,
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                    return cached_plan
 
         result = await self._provider.analyze_with_metrics(evidence_pack)
         plan = result.plan
         _validate_plan_references(plan, evidence_pack)
+        _validate_recommendation_quality(plan, evidence_pack)
         if self._cache is not None and cache_key is not None:
             self._cache.put(cache_key, plan)
 
@@ -66,6 +71,7 @@ class CaptureAnalyzer:
             output_tokens=result.metrics.output_tokens,
             cached_tokens=result.metrics.cached_tokens,
             cache_hit=False,
+            force_refresh=force_refresh,
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
         return plan
@@ -79,11 +85,12 @@ class CaptureAnalyzer:
         output_tokens: int | None,
         cached_tokens: int | None,
         cache_hit: bool,
+        force_refresh: bool,
         latency_ms: int,
     ) -> None:
         logger.info(
             "node_a_analysis model=%s candidate_raw_count=%d candidate_ai_count=%d evidence_chars=%d "
-            "input_tokens=%s output_tokens=%s cached_tokens=%s cache_hit=%s latency_ms=%d "
+            "input_tokens=%s output_tokens=%s cached_tokens=%s cache_hit=%s force_refresh=%s latency_ms=%d "
             "dropped_navigation=%d grouped_candidates=%d context_count=%d",
             self._provider.model_name,
             compiled.raw_count,
@@ -93,6 +100,7 @@ class CaptureAnalyzer:
             output_tokens if output_tokens is not None else "n/a",
             cached_tokens if cached_tokens is not None else "n/a",
             str(cache_hit).lower(),
+            str(force_refresh).lower(),
             latency_ms,
             compiled.dropped_navigation,
             compiled.grouped_candidates,
@@ -155,3 +163,118 @@ def _validate_plan_references(plan: ResourcePlan, evidence_pack: EvidencePack) -
         unknown_items = set(recommendation.item_ids) - item_ids
         if unknown_items:
             raise ValueError(f"ResourcePlan recommendation references unknown item_id: {sorted(unknown_items)}")
+
+
+def _validate_recommendation_quality(plan: ResourcePlan, evidence_pack: EvidencePack) -> None:
+    """Reject obviously unusable default recommendations without inventing a replacement.
+
+    This is intentionally narrow: it only catches attachment-only recommendations
+    and explicit current-device incompatibility when matching evidence is present.
+    The Runtime never chooses a different candidate on behalf of Node A.
+    """
+    if not plan.selected:
+        return
+
+    id_to_candidate: dict[str, EvidenceCandidate] = {}
+    for candidate in evidence_pack.candidates:
+        id_to_candidate[candidate.id] = candidate
+        for candidate_id in candidate.candidate_ids:
+            id_to_candidate[candidate_id] = candidate
+
+    selected_ids = {
+        candidate_id
+        for item in plan.selected
+        for candidate_id in item.candidate_ids
+    }
+    selected_candidates = [id_to_candidate[candidate_id] for candidate_id in selected_ids if candidate_id in id_to_candidate]
+
+    primary_candidates = [candidate for candidate in evidence_pack.candidates if not _is_verification_attachment(candidate)]
+    if primary_candidates and selected_candidates and all(_is_verification_attachment(candidate) for candidate in selected_candidates):
+        raise ValueError("ResourcePlan selected only verification/SBOM/checksum attachments while primary resources exist")
+
+    device = evidence_pack.device or {}
+    device_os = str(device.get("os") or "").lower()
+    device_arch = str(device.get("arch") or "").lower()
+    if device_os not in {"windows", "macos", "linux"}:
+        return
+
+    matching_os = [candidate for candidate in primary_candidates if _platform_hint(candidate) == device_os]
+    if not matching_os:
+        return
+
+    selected_os_match = any(_platform_hint(candidate) == device_os for candidate in selected_candidates)
+    if not selected_os_match:
+        raise ValueError(
+            f"ResourcePlan selected no {device_os} resource even though compatible {device_os} candidates exist"
+        )
+
+    if device_arch not in {"x64", "arm64", "x86"}:
+        return
+    matching_os_arch = [
+        candidate
+        for candidate in matching_os
+        if _arch_hint(candidate) == device_arch
+    ]
+    if not matching_os_arch:
+        return
+    selected_arch_match = any(
+        _platform_hint(candidate) == device_os and _arch_hint(candidate) == device_arch
+        for candidate in selected_candidates
+    )
+    if not selected_arch_match:
+        raise ValueError(
+            f"ResourcePlan selected no {device_os}/{device_arch} resource even though a matching candidate exists"
+        )
+
+
+def _is_verification_attachment(candidate: EvidenceCandidate) -> bool:
+    technical = candidate.technical_metadata
+    if str(technical.get("evidence_group_hint") or "").lower() == "signature_or_verification_files":
+        return True
+    if str(technical.get("attachment_kind") or "").lower() == "verification":
+        return True
+    extension = (candidate.extension or "").lower().lstrip(".")
+    if extension in {"asc", "gpg", "md5", "sha1", "sha256", "sha512", "sig", "sigstore", "spdx"}:
+        return True
+    return False
+
+
+def _platform_hint(candidate: EvidenceCandidate) -> str | None:
+    technical_hint = candidate.technical_metadata.get("platform_hint")
+    if isinstance(technical_hint, str) and technical_hint.lower() in {"windows", "macos", "linux"}:
+        return technical_hint.lower()
+    text = _identity_text(candidate)
+    if re.search(r"\b(?:windows|win32|win64)\b", text):
+        return "windows"
+    if re.search(r"\b(?:macos|mac\s+os|osx|darwin)\b", text):
+        return "macos"
+    if re.search(r"\b(?:linux|ubuntu|debian|appimage)\b", text) or re.search(r"\.rpm\b", text):
+        return "linux"
+    return None
+
+
+def _arch_hint(candidate: EvidenceCandidate) -> str | None:
+    technical_hint = candidate.technical_metadata.get("arch_hint")
+    if isinstance(technical_hint, str) and technical_hint.lower() in {"x64", "arm64", "x86"}:
+        return technical_hint.lower()
+    text = _identity_text(candidate)
+    if re.search(r"\b(?:arm64|aarch64)\b", text):
+        return "arm64"
+    if re.search(r"\b(?:x64|amd64|x86[_-]64|64-bit)\b", text):
+        return "x64"
+    if re.search(r"\b(?:x86|i386|i686|32-bit)\b", text):
+        return "x86"
+    return None
+
+
+def _identity_text(candidate: EvidenceCandidate) -> str:
+    return " ".join(
+        value.lower()
+        for value in (
+            candidate.display_name,
+            candidate.filename,
+            candidate.anchor_text,
+            candidate.section_heading,
+        )
+        if isinstance(value, str) and value
+    )
