@@ -191,20 +191,24 @@ export function StageDExtensionApp() {
     }
   }
 
-  async function analyzeCurrentBatch() {
+  async function analyzeCurrentBatch(forceRefresh = false) {
     if (!batch) return;
     setStatus('analyzing');
     setError(null);
     setCreatedJob(null);
     setFavoriteItem(null);
+    if (forceRefresh) setAnnotationCount(0);
 
     try {
-      const response = await fetch(`${RUNTIME_URL}/v1/capture/analyze`, {
+      const analyzeUrl = forceRefresh
+        ? `${RUNTIME_URL}/v1/capture/analyze?refresh=true`
+        : `${RUNTIME_URL}/v1/capture/analyze`;
+      const response = await fetch(analyzeUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(batch)
       });
-      if (!response.ok) throw new Error(await runtimeError(response, '智能分析失败'));
+      if (!response.ok) throw new Error(await runtimeError(response, forceRefresh ? '重新智能分析失败' : '智能分析失败'));
 
       const nextPlan = (await response.json()) as ResourcePlan;
       setPlan(nextPlan);
@@ -410,7 +414,7 @@ export function StageDExtensionApp() {
             </div>
           ) : (
             <div className="zhiqu-capture-actions">
-              <button className="zhiqu-primary" type="button" onClick={analyzeCurrentBatch} disabled={busy}>
+              <button className="zhiqu-primary" type="button" onClick={() => void analyzeCurrentBatch(false)} disabled={busy}>
                 <Sparkles size={18} />智能分析
               </button>
               <div className="zhiqu-capture-secondary-actions">
@@ -560,6 +564,16 @@ export function StageDExtensionApp() {
           </div>
 
           <div className="zhiqu-reselect-actions">
+            <button
+              className="zhiqu-reselect zhiqu-reanalyze-action"
+              type="button"
+              onClick={() => void analyzeCurrentBatch(true)}
+              disabled={busy}
+              title="忽略当前缓存，再调用一次智能分析"
+            >
+              {status === 'analyzing' ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}
+              {status === 'analyzing' ? '重新分析中…' : '重新智能分析'}
+            </button>
             <button className="zhiqu-reselect" type="button" onClick={() => captureResources('automatic')} disabled={busy}>
               <Search size={17} />重新扫描当前页
             </button>
