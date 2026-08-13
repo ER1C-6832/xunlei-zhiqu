@@ -68,19 +68,29 @@ def compile_evidence_pack(batch: CaptureBatch) -> CompiledEvidence:
     if reduced.contexts:
         page["contexts"] = reduced.contexts
 
+    available_ids = {
+        candidate_id
+        for candidate in reduced.candidates
+        for candidate_id in (candidate.candidate_ids or [candidate.id])
+    }
+    selection = None
+    if batch.selection:
+        selection_ids = [
+            candidate_id
+            for candidate_id in batch.selection.candidate_ids
+            if candidate_id in available_ids
+        ]
+        selection = {
+            "type": batch.selection.type,
+            "candidate_ids": selection_ids,
+            "rect": batch.selection.rect.model_dump(mode="json") if batch.selection.rect else None,
+        }
+
     return CompiledEvidence(
         pack=EvidencePack(
             batch_id=batch.batch_id,
             page=page,
-            selection=(
-                {
-                    "type": batch.selection.type,
-                    "candidate_ids": batch.selection.candidate_ids,
-                    "rect": batch.selection.rect.model_dump(mode="json") if batch.selection.rect else None,
-                }
-                if batch.selection
-                else None
-            ),
+            selection=selection,
             device=batch.device.model_dump(mode="json") if batch.device else None,
             candidates=reduced.candidates,
         ),
