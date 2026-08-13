@@ -15,6 +15,7 @@ from xunlei_zhiqu_runtime.providers.base import (
 
 
 logger = logging.getLogger("uvicorn.error")
+PLAN_ITEM_GROUPS = ("selected", "alternatives", "excluded", "uncertainties")
 
 SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型节点。
 
@@ -26,12 +27,13 @@ SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型�
 5. candidate_type=page 不是自动排除理由。只有证据显示它是导航、无关入口或不适合作为资源时才可在语义层标为 excluded/unknown。
 6. 对专业文件名和技术缩写给出普通用户能理解的解释；比较版本、平台、架构、包类型、媒体规格和附件关系时说明证据来源。
 7. technical_metadata.resource_family_hint 只是扩展名 Registry 给出的本地提示，不是最终语义。resource_family_ambiguous=true 时尤其必须结合文件名、页面上下文、MIME 和其他技术元数据判断，不可只凭扩展名下结论。
-8. 存在合理分歧或证据不足时放入 uncertainties，不要硬猜。
-9. recommendations 必须是场景化建议，例如当前设备兼容、质量优先、体积优先或手动选择，并引用已有 item_id。
-10. 尽量覆盖 EvidencePack 中所有有意义候选。用途和证据完全相同的附件可在一个 PlanItem 中引用多个 candidate_id；不得因为文件名相似就把不同候选当成同一资源。
-11. 输出要通俗且紧凑，避免对重复的签名、SBOM、校验附件逐项复述相同长文。
-12. 必须只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏或 JSON 之外的解释文字。
-13. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时必须输出 {}，绝不能输出 null、[]、字符串或其他类型。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
+8. 存在合理分歧或证据不足时放入 uncertainties，不要硬猜。uncertainties 中的每个 PlanItem 也必须至少引用 1 个真实 candidate_id；如果只是对整批资源的泛化不确定说明、无法锚定任何候选，请把它写进 overview，不要创建空 candidate_ids 的 PlanItem。
+9. recommendations 必须是场景化建议，例如当前设备兼容、质量优先、体积优先或手动选择，并引用至少 1 个已有 item_id；没有可引用 item 时不要输出该 recommendation。
+10. selected、alternatives、excluded、uncertainties 中的每个 PlanItem 都必须至少引用 1 个 EvidencePack 中已有 candidate id；绝不能输出 candidate_ids=[]、null 或缺失 candidate_ids。
+11. 尽量覆盖 EvidencePack 中所有有意义候选。用途和证据完全相同的附件可在一个 PlanItem 中引用多个 candidate_id；不得因为文件名相似就把不同候选当成同一资源。
+12. 输出要通俗且紧凑，避免对重复的签名、SBOM、校验附件逐项复述相同长文。
+13. 必须只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏或 JSON 之外的解释文字。
+14. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时必须输出 {}，绝不能输出 null、[]、字符串或其他类型。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
 
 输出单个 JSON 对象，只包含输出契约要求的业务字段。"""
 
@@ -46,7 +48,7 @@ OUTPUT_CONTRACT = {
     "recommendations": "ScenarioRecommendation[]",
     "PlanItem": {
         "item_id": "unique string",
-        "candidate_ids": ["existing candidate id"],
+        "candidate_ids": ["one or more existing candidate ids; never empty"],
         "label": "plain-language label",
         "plain_explanation": "plain-language explanation",
         "reason": "evidence-based reason",
@@ -56,7 +58,7 @@ OUTPUT_CONTRACT = {
     },
     "ScenarioRecommendation": {
         "scenario": "current_device|compatibility|quality|small_size|manual",
-        "item_ids": ["existing PlanItem item_id"],
+        "item_ids": ["one or more existing PlanItem item ids; omit recommendation when none"],
         "summary": "string",
     },
 }
@@ -117,10 +119,6 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 {"role": "user", "content": user_content},
             ],
         }
-        # DashScope DeepSeek V4 enables thinking by default, while DashScope JSON
-        # mode requires thinking to be disabled. Keep this compatibility shim scoped
-        # to the known provider/model pair so other OpenAI-compatible endpoints do
-        # not receive a provider-specific parameter.
         if self._dashscope_deepseek_v4:
             payload["enable_thinking"] = False
 
@@ -207,11 +205,20 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         if not isinstance(parsed, dict):
             raise ModelProviderResponseError("模型 JSON 顶层必须是对象，不能是数组或纯文本。")
 
-        normalized_attributes = _normalize_empty_technical_attributes(parsed)
-        if normalized_attributes:
+        normalization = _normalize_model_resource_plan(parsed)
+        if any(normalization.values()):
             logger.info(
-                "node_a_normalized_empty_technical_attributes count=%d",
-                normalized_attributes,
+                "node_a_normalized_output empty_groups=%d empty_attributes=%d scalar_candidate_ids=%d "
+                "deduped_candidate_ids=%d dropped_unanchored_items=%d normalized_evidence_refs=%d "
+                "dropped_empty_recommendations=%d normalized_recommendation_item_ids=%d",
+                normalization["empty_groups"],
+                normalization["empty_attributes"],
+                normalization["scalar_candidate_ids"],
+                normalization["deduped_candidate_ids"],
+                normalization["dropped_unanchored_items"],
+                normalization["normalized_evidence_refs"],
+                normalization["dropped_empty_recommendations"],
+                normalization["normalized_recommendation_item_ids"],
             )
 
         parsed["schema_version"] = "0.1"
@@ -244,21 +251,125 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         return stripped
 
 
-def _normalize_empty_technical_attributes(parsed: dict[str, object]) -> int:
-    """Normalize only semantically empty model variants; never coerce non-empty bad data."""
-    normalized = 0
-    for group_name in ("selected", "alternatives", "excluded", "uncertainties"):
+def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
+    """Normalize only semantically equivalent model shape variants.
+
+    Candidate-less PlanItems are dropped because they cannot be grounded, located,
+    selected, or executed. Unknown candidate IDs are intentionally preserved here
+    so the deterministic analyzer can still reject hallucinated references.
+    """
+    stats = {
+        "empty_groups": 0,
+        "empty_attributes": 0,
+        "scalar_candidate_ids": 0,
+        "deduped_candidate_ids": 0,
+        "dropped_unanchored_items": 0,
+        "normalized_evidence_refs": 0,
+        "dropped_empty_recommendations": 0,
+        "normalized_recommendation_item_ids": 0,
+    }
+
+    for group_name in PLAN_ITEM_GROUPS:
         items = parsed.get(group_name)
+        if items is None:
+            parsed[group_name] = []
+            stats["empty_groups"] += 1
+            continue
         if not isinstance(items, list):
             continue
+
+        normalized_items: list[object] = []
         for item in items:
-            if not isinstance(item, dict) or "technical_attributes" not in item:
+            if not isinstance(item, dict):
+                normalized_items.append(item)
                 continue
+
             value = item.get("technical_attributes")
             if value is None or value == []:
                 item["technical_attributes"] = {}
-                normalized += 1
-    return normalized
+                stats["empty_attributes"] += 1
+
+            candidate_ids = item.get("candidate_ids")
+            if isinstance(candidate_ids, str):
+                item["candidate_ids"] = [candidate_ids.strip()] if candidate_ids.strip() else []
+                stats["scalar_candidate_ids"] += 1
+            elif candidate_ids is None:
+                item["candidate_ids"] = []
+            elif isinstance(candidate_ids, list):
+                normalized_ids, removed = _dedupe_string_list(candidate_ids)
+                item["candidate_ids"] = normalized_ids
+                stats["deduped_candidate_ids"] += removed
+
+            if isinstance(item.get("candidate_ids"), list) and not item["candidate_ids"]:
+                stats["dropped_unanchored_items"] += 1
+                continue
+
+            evidence_refs = item.get("evidence_refs")
+            if evidence_refs is None:
+                item["evidence_refs"] = []
+                stats["normalized_evidence_refs"] += 1
+            elif isinstance(evidence_refs, str):
+                item["evidence_refs"] = [evidence_refs.strip()] if evidence_refs.strip() else []
+                stats["normalized_evidence_refs"] += 1
+            elif isinstance(evidence_refs, list):
+                normalized_refs, removed = _dedupe_string_list(evidence_refs)
+                if removed or normalized_refs != evidence_refs:
+                    item["evidence_refs"] = normalized_refs
+                    stats["normalized_evidence_refs"] += 1
+
+            normalized_items.append(item)
+        parsed[group_name] = normalized_items
+
+    recommendations = parsed.get("recommendations")
+    if recommendations is None:
+        parsed["recommendations"] = []
+        stats["empty_groups"] += 1
+    elif isinstance(recommendations, list):
+        normalized_recommendations: list[object] = []
+        for recommendation in recommendations:
+            if not isinstance(recommendation, dict):
+                normalized_recommendations.append(recommendation)
+                continue
+            item_ids = recommendation.get("item_ids")
+            if isinstance(item_ids, str):
+                recommendation["item_ids"] = [item_ids.strip()] if item_ids.strip() else []
+                stats["normalized_recommendation_item_ids"] += 1
+            elif item_ids is None:
+                recommendation["item_ids"] = []
+                stats["normalized_recommendation_item_ids"] += 1
+            elif isinstance(item_ids, list):
+                normalized_item_ids, removed = _dedupe_string_list(item_ids)
+                if removed or normalized_item_ids != item_ids:
+                    recommendation["item_ids"] = normalized_item_ids
+                    stats["normalized_recommendation_item_ids"] += 1
+
+            if isinstance(recommendation.get("item_ids"), list) and not recommendation["item_ids"]:
+                stats["dropped_empty_recommendations"] += 1
+                continue
+            normalized_recommendations.append(recommendation)
+        parsed["recommendations"] = normalized_recommendations
+
+    return stats
+
+
+def _dedupe_string_list(values: list[object]) -> tuple[list[object], int]:
+    result: list[object] = []
+    seen: set[str] = set()
+    removed = 0
+    for value in values:
+        if not isinstance(value, str):
+            result.append(value)
+            continue
+        cleaned = value.strip()
+        if not cleaned:
+            removed += 1
+            continue
+        if cleaned in seen:
+            removed += 1
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result, removed
 
 
 def _validation_summary(exc: ValidationError) -> str:
