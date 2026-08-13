@@ -1,6 +1,7 @@
 import type { CaptureBatch, ManualJobCreateRequest } from '@xunlei-zhiqu/contracts';
 import { ArrowLeft, Check, Images, LoaderCircle, RefreshCw, Send } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useZhiquCapabilities } from './hooks/useZhiquCapabilities';
 import { zhiquService } from './services/zhiquServiceClient';
 
 type ImageFilter = 'all' | 'large' | 'original';
@@ -14,6 +15,8 @@ export function BatchImagePanel() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<ImageFilter>('all');
   const [error, setError] = useState<string | null>(null);
+  const capabilities = useZhiquCapabilities();
+  const canCreateLocalJob = capabilities?.localDownload === true;
 
   const visible = useMemo(() => {
     const items = batch?.candidates || [];
@@ -65,6 +68,10 @@ export function BatchImagePanel() {
 
   async function createBatchJob() {
     if (!batch || !selected.size) return;
+    if (!canCreateLocalJob) {
+      setError('当前没有本地下载能力，请连接迅雷客户端后再创建批量图片任务。');
+      return;
+    }
     const links = batch.candidates
       .filter((candidate) => selected.has(candidate.candidate_id) && /^https?:/i.test(candidate.value))
       .map((candidate) => candidate.value)
@@ -150,9 +157,15 @@ export function BatchImagePanel() {
           {!visible.length && <div className="zhiqu-image-empty">这个筛选条件下没有图片。</div>}
 
           <footer className="zhiqu-image-footer">
-            <button type="button" className="zhiqu-primary" disabled={!selected.size || creating} onClick={() => void createBatchJob()}>
+            <button
+              type="button"
+              className="zhiqu-primary"
+              disabled={!selected.size || creating || !canCreateLocalJob}
+              onClick={() => void createBatchJob()}
+              title={!canCreateLocalJob ? '连接迅雷客户端后才能创建本地下载任务' : undefined}
+            >
               {creating ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
-              交给任务中心（{selected.size}）
+              {canCreateLocalJob ? `交给任务中心（${selected.size}）` : '连接迅雷后下载'}
             </button>
           </footer>
         </>
