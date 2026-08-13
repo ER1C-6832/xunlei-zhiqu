@@ -23,8 +23,16 @@ _VERIFICATION_EXTENSIONS = {
     "sigstore",
     "spdx",
 }
-_VERIFICATION_WORDS = re.compile(
-    r"\b(?:checksum|checksums|gpg|hash|md5|sbom|sha-?1|sha-?256|sha-?512|signature|sigstore|spdx)\b",
+_VERIFICATION_IDENTITY_LABEL = re.compile(
+    r"^(?:checksum(?:s)?|gpg(?:\s+key)?|hash|md5|sbom|sha-?1|sha-?256|sha-?512|sig|signature|sigstore|spdx)$",
+    re.IGNORECASE,
+)
+_VERIFICATION_FILENAME_SUFFIX = re.compile(
+    r"(?:\.(?:asc|gpg|md5|sha1|sha256|sha512|sig|sigstore|spdx)(?:\.json)?|\.sbom\.json)$",
+    re.IGNORECASE,
+)
+_VERIFICATION_FILENAME_NAME = re.compile(
+    r"^(?:checksums?|sha(?:1|256|512)sums?)(?:\.[a-z0-9]+)?$",
     re.IGNORECASE,
 )
 
@@ -188,6 +196,7 @@ def _group_verification_evidence(
             "evidence_group_hint": "signature_or_verification_files",
             "group_count": len(merged_ids),
             "resource_family_hint": "document",
+            "attachment_kind": "verification",
         }
         replace_at[indexes[0]] = EvidenceCandidate(
             id=merged_ids[0],
@@ -219,24 +228,56 @@ def _group_verification_evidence(
 
 
 def _is_verification_candidate(candidate: EvidenceCandidate) -> bool:
+    """Return True only when the candidate itself is a verification attachment.
+
+    Nearby/table-row text is deliberately excluded. Real download rows often contain
+    adjacent SHA256, GPG, Sigstore or SBOM links; treating those neighboring words as
+    the identity of the main .exe/.zip/.tar.gz candidate collapses primary resources
+    into the attachment group and destroys platform/version choice evidence.
+    """
     extension = (candidate.extension or "").lower().lstrip(".")
     if extension in _VERIFICATION_EXTENSIONS:
         return True
+
     technical = candidate.technical_metadata
-    hint = str(technical.get("resource_family_hint") or "")
+    hint = str(technical.get("resource_family_hint") or "").strip().lower()
     if hint in {"signature", "checksum", "sbom", "verification"}:
         return True
-    text = " ".join(
-        value
-        for value in (
-            candidate.display_name,
-            candidate.filename,
-            candidate.anchor_text,
-            candidate.nearby_text,
-        )
-        if value
-    )
-    return bool(_VERIFICATION_WORDS.search(text))
+    if str(technical.get("attachment_kind") or "").strip().lower() == "verification":
+        return True
+
+    if _looks_like_verification_filename(candidate.filename):
+        return True
+
+    content_disposition = technical.get("content_disposition")
+    if isinstance(content_disposition, str) and _looks_like_verification_filename(content_disposition):
+        return True
+
+    # Exact identity labels such as "sha256", "SPDX", "SIG" or "GPG Key" are
+    # attachment evidence. Do not keyword-search arbitrary anchor/display text.
+    for value in (candidate.display_name, candidate.anchor_text):
+        label = _normalize_identity_label(value)
+        if label and _VERIFICATION_IDENTITY_LABEL.fullmatch(label):
+            return True
+
+    return False
+
+
+def _looks_like_verification_filename(value: str | None) -> bool:
+    if not value:
+        return False
+    cleaned = value.strip().lower().replace("\\", "/")
+    cleaned = cleaned.rsplit("/", 1)[-1].split("?", 1)[0].split("#", 1)[0]
+    if _VERIFICATION_FILENAME_SUFFIX.search(cleaned):
+        return True
+    return bool(_VERIFICATION_FILENAME_NAME.fullmatch(cleaned))
+
+
+def _normalize_identity_label(value: str | None) -> str:
+    if not value:
+        return ""
+    cleaned = " ".join(value.strip().lower().split())
+    return cleaned.strip(" .:()[]{}")
 
 
 def _dedupe_nearby_context(
