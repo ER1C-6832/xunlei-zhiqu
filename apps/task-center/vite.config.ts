@@ -3,7 +3,11 @@ import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ command, mode }: { command: string; mode: string }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
-  const configuredRuntime = env.VITE_RUNTIME_URL?.trim().replace(/\/+$/, '');
+  const configuredRuntime = (
+    process.env.VITE_RUNTIME_URL
+    || env.VITE_RUNTIME_URL
+    || ''
+  ).trim().replace(/\/+$/, '');
   // Dev keeps today's local workflow. Production defaults to same-origin, so the
   // exact same Task Center build can be served by a local Runtime or a remote
   // Runtime/Gateway host without hard-coding 127.0.0.1 into application code.
