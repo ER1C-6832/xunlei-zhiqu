@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from uuid import uuid4
 
 import httpx
@@ -7,6 +8,8 @@ from pydantic import ValidationError
 
 from xunlei_zhiqu_runtime.models import EvidencePack, ResourcePlan
 from xunlei_zhiqu_runtime.providers.base import (
+    ModelAnalysisResult,
+    ModelCallMetrics,
     ModelProviderAdapter,
     ModelProviderRequestError,
     ModelProviderResponseError,
@@ -15,33 +18,43 @@ from xunlei_zhiqu_runtime.providers.base import (
 
 
 logger = logging.getLogger("uvicorn.error")
+PROMPT_VERSION = "stage-d6-v1"
 PLAN_ITEM_GROUPS = ("selected", "alternatives", "excluded", "uncertainties")
 RECOMMENDATION_SCENARIOS = {"current_device", "compatibility", "quality", "small_size", "manual"}
 
-SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型节点。
+SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型节点。目标不是逐文件写报告，而是把几十个技术候选压缩成普通用户能快速选择的少量资源组。
 
-硬性规则：
-1. 不猜用户隐藏意图。当前设备信息只是客观兼容证据，不等于用户唯一目标。
-2. 只能依据 EvidencePack 中已有事实；不得编造 URL、版本、平台、架构、语言、字幕、清晰度、大小、哈希或兼容性。
-3. 只能引用 EvidencePack 中已经存在的 candidate id，绝不能生成新的 candidate id。
-4. ResourcePlan 是 AI 分析与推荐，不代表用户最终决定；措辞必须允许用户修改。
-5. candidate_type=page 不是自动排除理由。只有证据显示它是导航、无关入口或不适合作为资源时才可在语义层标为 excluded/unknown。
-6. 对专业文件名和技术缩写给出普通用户能理解的解释；比较版本、平台、架构、包类型、媒体规格和附件关系时说明证据来源。
-7. technical_metadata.resource_family_hint 只是扩展名 Registry 给出的本地提示，不是最终语义。resource_family_ambiguous=true 时尤其必须结合文件名、页面上下文、MIME 和其他技术元数据判断，不可只凭扩展名下结论。
-8. 存在合理分歧或证据不足时放入 uncertainties，不要硬猜。uncertainties 中的每个 PlanItem 也必须至少引用 1 个真实 candidate_id；如果只是对整批资源的泛化不确定说明、无法锚定任何候选，请把它写进 overview，不要创建空 candidate_ids 的 PlanItem。
-9. recommendations 必须是场景化建议，例如当前设备兼容、质量优先、体积优先或手动选择，并引用至少 1 个已有 item_id；没有可引用 item 时不要输出该 recommendation。
-10. selected、alternatives、excluded、uncertainties 中的每个 PlanItem 都必须至少引用 1 个 EvidencePack 中已有 candidate id；绝不能输出 candidate_ids=[]、null 或缺失 candidate_ids。
-11. 尽量覆盖 EvidencePack 中所有有意义候选。用途和证据完全相同的附件可在一个 PlanItem 中引用多个 candidate_id；不得因为文件名相似就把不同候选当成同一资源。
-12. 输出要通俗且紧凑，避免对重复的签名、SBOM、校验附件逐项复述相同长文。
-13. 必须只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏或 JSON 之外的解释文字。
-14. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时输出 {}。对象内可以使用 JSON 标量、数组或嵌套对象来表达媒体编码、分辨率集合、模型量化等结构化事实，但 technical_attributes 本身绝不能是 null、数组或字符串。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
+工作顺序：
+1. 先判断这一批资源整体是什么。
+2. 找主资源，识别版本、平台、架构、安装形式、清晰度、格式等真正影响选择的差异。
+3. 识别字幕、语言包、签名、校验、SBOM、配置、Tokenizer 等附件；同用途附件尽量合并。
+4. 把专业文件名翻译成普通用户语言。
+5. 根据明确事实给少量、可修改的推荐；证据不足才放 uncertainty。
 
-输出单个 JSON 对象，只包含输出契约要求的业务字段。"""
+安全与证据规则：
+- 不猜隐藏意图。设备信息只是兼容证据，不是唯一目标。
+- 只能用 EvidencePack 事实，不得编造 URL、版本、平台、架构、语言、清晰度、大小、哈希或兼容性。
+- 只能引用 EvidencePack 中已有 candidate id。一个 evidence entry 的 candidate_ids 可能包含多个原始候选，这些 ID 都可被 PlanItem 引用；绝不能生成新 ID。
+- ResourcePlan 是建议，不是用户最终决定。
+- resource_family_hint 只是本地 hint；ambiguous=true 时必须结合文件名、上下文、MIME 与技术元数据。
+- candidate_type=page 不是自动排除理由。
+
+压缩原则：
+- 不要为每个候选生成一张卡片。用途相同、差异不影响决策时，用一个 PlanItem.candidate_ids[] 聚合多个候选。
+- selected 通常只放 1~3 个真正建议组；alternatives 按“其他平台/版本/格式/清晰度/安装方式”聚合。
+- 签名、校验、SBOM 等重复辅助文件尽量合成一个 attachment PlanItem。
+- excluded 不要求覆盖所有低价值项；仅在有助于用户理解时保留少量逻辑组。
+- uncertainties 只写真正影响选择、且能锚定至少一个 candidate 的问题；泛化不确定说明写进 overview。
+- recommendations 只保留少量有价值场景，没有 item 可引用就不要输出。
+
+关注差异：软件看平台/架构/版本/安装版/便携版/源码/补丁/语言包；视频看分辨率/编码/HDR/音轨/字幕/单集全集；音频看格式/码率/采样率/位深；图片看原图/缩略图/分辨率/格式；文档看格式/版本/语言/源文件；模型看格式/量化/精度/框架/硬件需求及权重与配置关系。
+
+结构规则：所有 PlanItem 至少引用 1 个真实 candidate_id；technical_attributes 必须是 JSON object；candidate_ids/evidence_refs/recommendation.item_ids 必须是数组。只输出一个 JSON 对象，不要 Markdown。"""
 
 OUTPUT_CONTRACT = {
     "resource_type": "software|document|video|audio|image|subtitle|model|design|archive|disk_image|mixed|unknown",
     "resource_title": "string",
-    "overview": "string",
+    "overview": "brief plain-language summary",
     "selected": "PlanItem[]",
     "alternatives": "PlanItem[]",
     "excluded": "PlanItem[]",
@@ -49,18 +62,18 @@ OUTPUT_CONTRACT = {
     "recommendations": "ScenarioRecommendation[]",
     "PlanItem": {
         "item_id": "unique string",
-        "candidate_ids": ["one or more existing candidate ids; never empty"],
-        "label": "plain-language label",
-        "plain_explanation": "plain-language explanation",
-        "reason": "evidence-based reason",
+        "candidate_ids": ["one or more existing candidate ids"],
+        "label": "short user-facing label",
+        "plain_explanation": "brief explanation",
+        "reason": "brief evidence-based reason",
         "role": "primary|attachment|alternative|excluded|unknown",
-        "technical_attributes": "JSON object; values may be JSON scalar/array/object; use {} when empty; the field itself must never be array/null/string",
-        "evidence_refs": ["optional string evidence references"],
+        "technical_attributes": {},
+        "evidence_refs": [],
     },
     "ScenarioRecommendation": {
         "scenario": "current_device|compatibility|quality|small_size|manual",
-        "item_ids": ["one or more existing PlanItem item ids; omit recommendation when none"],
-        "summary": "string",
+        "item_ids": ["existing PlanItem item ids"],
+        "summary": "brief summary",
     },
 }
 
@@ -99,9 +112,21 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             ),
         )
 
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    @property
+    def cache_namespace(self) -> str:
+        return f"{self.name}:{self._model}:{PROMPT_VERSION}:max{self._max_completion_tokens}"
+
     async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
+        return (await self.analyze_with_metrics(evidence_pack)).plan
+
+    async def analyze_with_metrics(self, evidence_pack: EvidencePack) -> ModelAnalysisResult:
+        started = time.perf_counter()
         request_document = {
-            "task": "解释资源是什么，翻译技术名称，比较版本/规格，给出可修改的场景化推荐，并标出不确定项。请严格按照 JSON 输出契约返回。",
+            "task": "把这批候选整理成少量用户可选择的资源组，解释关键差异并给出可修改推荐。",
             "evidence_pack": evidence_pack.model_dump(mode="json", exclude_none=True),
             "output_contract": OUTPUT_CONTRACT,
         }
@@ -124,12 +149,11 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             payload["enable_thinking"] = False
 
         logger.info(
-            "node_a_request model=%s candidates=%d prompt_chars=%d read_timeout_seconds=%.0f "
-            "max_completion_tokens=%d dashscope_non_thinking_json=%s",
+            "node_a_request model=%s ai_evidence_count=%d prompt_chars=%d max_completion_tokens=%d "
+            "dashscope_non_thinking_json=%s",
             self._model,
             len(evidence_pack.candidates),
             len(user_content),
-            self._read_timeout_seconds,
             self._max_completion_tokens,
             self._dashscope_deepseek_v4,
         )
@@ -139,7 +163,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         except httpx.ReadTimeout as exc:
             raise ModelProviderTimeoutError(
                 f"模型服务在 {self._read_timeout_seconds:.0f} 秒内没有返回响应；"
-                f"本次 EvidencePack 含 {len(evidence_pack.candidates)} 个候选。"
+                f"本次精简 EvidencePack 含 {len(evidence_pack.candidates)} 个 AI evidence group。"
                 "可以直接重试；若连续发生，请检查 MODEL_BASE_URL、系统代理或模型服务状态。"
             ) from exc
         except httpx.TimeoutException as exc:
@@ -185,7 +209,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         if finish_reason == "length":
             raise ModelProviderResponseError(
                 f"模型输出达到长度上限，ResourcePlan 被截断。当前 max_completion_tokens="
-                f"{self._max_completion_tokens}；请提高 MODEL_MAX_COMPLETION_TOKENS 后重试。"
+                f"{self._max_completion_tokens}；请先检查是否仍生成了过多 PlanItem，再考虑提高上限。"
             )
         if not isinstance(content, str) or not content.strip():
             hint = ""
@@ -232,7 +256,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         parsed["provider"] = self.name
         parsed.setdefault("plan_id", f"plan_{uuid4().hex[:12]}")
         try:
-            return ResourcePlan.model_validate(parsed)
+            plan = ResourcePlan.model_validate(parsed)
         except ValidationError as exc:
             summary = _validation_summary(exc)
             logger.warning(
@@ -243,6 +267,18 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             raise ModelProviderResponseError(
                 f"模型返回了 JSON，但不符合 ResourcePlan：{summary}"
             ) from exc
+
+        input_tokens, output_tokens, cached_tokens = _usage_metrics(body)
+        return ModelAnalysisResult(
+            plan=plan,
+            metrics=ModelCallMetrics(
+                model=self._model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_tokens=cached_tokens,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            ),
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -255,6 +291,35 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             lines = lines[1:-1] if len(lines) >= 3 else lines
             return "\n".join(lines).strip()
         return stripped
+
+
+def _usage_metrics(body: object) -> tuple[int | None, int | None, int | None]:
+    if not isinstance(body, dict):
+        return None, None, None
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None, None, None
+    input_tokens = _as_int(usage.get("prompt_tokens"))
+    if input_tokens is None:
+        input_tokens = _as_int(usage.get("input_tokens"))
+    output_tokens = _as_int(usage.get("completion_tokens"))
+    if output_tokens is None:
+        output_tokens = _as_int(usage.get("output_tokens"))
+    cached_tokens = None
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached_tokens = _as_int(details.get("cached_tokens"))
+    return input_tokens, output_tokens, cached_tokens
+
+
+def _as_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
