@@ -12,11 +12,6 @@ from xunlei_zhiqu_runtime.providers.output_wire import (
     WIRE2_SYSTEM_SUFFIX,
     expand_compact_resource_plan,
 )
-from xunlei_zhiqu_runtime.providers.output_wire3 import (
-    WIRE3_OUTPUT_CONTRACT,
-    WIRE3_SYSTEM_SUFFIX,
-    expand_positional_resource_plan,
-)
 from xunlei_zhiqu_runtime.providers.pipeline_wire import (
     PIPELINE_OUTPUT_CONTRACT,
     PIPELINE_SYSTEM_SUFFIX,
@@ -81,42 +76,8 @@ _FAST_OUTPUT_CONTRACT = {
     },
 }
 
-# Compact v1 is retained only so prior A/B results remain reproducible. It reduced
-# input slightly but produced longer output on the Oracle baseline, so it is not
-# the recommended low-latency profile.
-_COMPACT_SYSTEM_PROMPT = """你是“迅雷智取”节点A。仅据 EvidencePack 输出简洁 ResourcePlan；不猜意图，不编造事实或 ID。
-硬约束：
-1. 只能引用已有 candidate id；每个 PlanItem 至少 1 个 candidate_id。
-2. 若有匹配 device.os/device.arch 的主资源，selected 必须含匹配项；不能只选其他系统、源码或验证附件。
-3. 签名/checksum/GPG/SBOM/Sigstore 是附件；有主资源时不得作为唯一 selected。当前设备有可用安装包/压缩包时，源码放 alternatives。
-4. resource_family_hint 仅是提示，ambiguous=true 时结合文件名、上下文、MIME、metadata。
-5. selected 通常 1 项最多 2；alternatives 最多 3 组；excluded/uncertainties/recommendations 各最多 1。相同用途用 candidate_ids 聚合。
-6. 文字短：overview 1~2句；说明只写“是什么/适合谁”；reason 只写关键依据；避免重复设备、版本、文件名。泛化不确定性写 overview。
-7. technical_attributes 为 JSON object；candidate_ids/evidence_refs/item_ids 为数组。只输出 JSON。
-resource_type: software|document|video|audio|image|subtitle|model|design|archive|disk_image|mixed|unknown。
-role: primary|attachment|alternative|excluded|unknown。scenario: current_device|compatibility|quality|small_size|manual。"""
-
-_COMPACT_OUTPUT_CONTRACT = {
-    "resource_type": "enum",
-    "resource_title": "s",
-    "overview": "s",
-    "selected": "items",
-    "alternatives": "items",
-    "excluded": "items",
-    "uncertainties": "items",
-    "recommendations": "recs",
-    "item_fields": "item_id,candidate_ids,label,plain_explanation,reason,role,technical_attributes,evidence_refs",
-    "rec_fields": "scenario,item_ids,summary",
-}
-
 
 def _wire2_normalizer(parsed: dict[str, object]) -> dict[str, int]:
-    expand_compact_resource_plan(parsed)
-    return _BASE_NORMALIZER(parsed)
-
-
-def _wire3_normalizer(parsed: dict[str, object]) -> dict[str, int]:
-    expand_positional_resource_plan(parsed)
     expand_compact_resource_plan(parsed)
     return _BASE_NORMALIZER(parsed)
 
@@ -162,8 +123,8 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
     elif settings.node_a_profile == "pipeline":
         # Full transport-path A/B from wire2. Keep the same model and reducer,
         # but compact repeated EvidencePack field names, move the fixed protocol
-        # into the system prefix, derive role locally, and send only changing
-        # evidence in the user message.
+        # into the system prefix, derive deterministic output fields locally,
+        # and send only changing evidence in the user message.
         compact_contract = json.dumps(
             PIPELINE_OUTPUT_CONTRACT,
             ensure_ascii=False,
@@ -184,18 +145,6 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
         max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
         provider_model = settings.node_a_latency_model.strip() or settings.model_name
         use_wire = True
-    elif settings.node_a_profile == "wire3":
-        system_prompt = f"{_FAST_SYSTEM_PROMPT}{WIRE3_SYSTEM_SUFFIX}"
-        output_contract = WIRE3_OUTPUT_CONTRACT
-        prompt_version = "stage-d6-wire3-v1"
-        normalizer = _wire3_normalizer
-        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
-        use_wire = True
-    elif settings.node_a_profile == "compact":
-        system_prompt = _COMPACT_SYSTEM_PROMPT
-        output_contract = _COMPACT_OUTPUT_CONTRACT
-        prompt_version = "stage-d6-compact-v1"
-        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
 
     logger.info(
         "node_a_profile profile=%s prompt_version=%s model=%s max_completion_tokens=%d",
