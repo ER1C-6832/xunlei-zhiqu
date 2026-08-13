@@ -16,6 +16,7 @@ from xunlei_zhiqu_runtime.providers.base import (
 
 logger = logging.getLogger("uvicorn.error")
 PLAN_ITEM_GROUPS = ("selected", "alternatives", "excluded", "uncertainties")
+RECOMMENDATION_SCENARIOS = {"current_device", "compatibility", "quality", "small_size", "manual"}
 
 SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型节点。
 
@@ -33,7 +34,7 @@ SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型�
 11. 尽量覆盖 EvidencePack 中所有有意义候选。用途和证据完全相同的附件可在一个 PlanItem 中引用多个 candidate_id；不得因为文件名相似就把不同候选当成同一资源。
 12. 输出要通俗且紧凑，避免对重复的签名、SBOM、校验附件逐项复述相同长文。
 13. 必须只输出一个合法 JSON 对象，不要输出 Markdown、代码围栏或 JSON 之外的解释文字。
-14. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时必须输出 {}，绝不能输出 null、[]、字符串或其他类型。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
+14. 每个 PlanItem.technical_attributes 必须始终是 JSON object；没有技术属性时输出 {}。对象内可以使用 JSON 标量、数组或嵌套对象来表达媒体编码、分辨率集合、模型量化等结构化事实，但 technical_attributes 本身绝不能是 null、数组或字符串。candidate_ids、evidence_refs、recommendations[*].item_ids 必须始终是 JSON array。
 
 输出单个 JSON 对象，只包含输出契约要求的业务字段。"""
 
@@ -53,8 +54,8 @@ OUTPUT_CONTRACT = {
         "plain_explanation": "plain-language explanation",
         "reason": "evidence-based reason",
         "role": "primary|attachment|alternative|excluded|unknown",
-        "technical_attributes": "JSON object<string, string|number|boolean|null>; use {} when empty; never array/null/string",
-        "evidence_refs": ["optional evidence reference"],
+        "technical_attributes": "JSON object; values may be JSON scalar/array/object; use {} when empty; the field itself must never be array/null/string",
+        "evidence_refs": ["optional string evidence references"],
     },
     "ScenarioRecommendation": {
         "scenario": "current_device|compatibility|quality|small_size|manual",
@@ -209,15 +210,17 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         if any(normalization.values()):
             logger.info(
                 "node_a_normalized_output empty_groups=%d empty_attributes=%d scalar_candidate_ids=%d "
-                "deduped_candidate_ids=%d dropped_unanchored_items=%d normalized_evidence_refs=%d "
-                "dropped_empty_recommendations=%d normalized_recommendation_item_ids=%d",
+                "cleaned_candidate_ids=%d dropped_unanchored_items=%d normalized_evidence_refs=%d "
+                "dropped_empty_recommendations=%d dropped_invalid_recommendations=%d "
+                "normalized_recommendation_item_ids=%d",
                 normalization["empty_groups"],
                 normalization["empty_attributes"],
                 normalization["scalar_candidate_ids"],
-                normalization["deduped_candidate_ids"],
+                normalization["cleaned_candidate_ids"],
                 normalization["dropped_unanchored_items"],
                 normalization["normalized_evidence_refs"],
                 normalization["dropped_empty_recommendations"],
+                normalization["dropped_invalid_recommendations"],
                 normalization["normalized_recommendation_item_ids"],
             )
 
@@ -255,17 +258,18 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
     """Normalize only semantically equivalent model shape variants.
 
     Candidate-less PlanItems are dropped because they cannot be grounded, located,
-    selected, or executed. Unknown candidate IDs are intentionally preserved here
+    selected, or executed. Unknown string candidate IDs are intentionally preserved
     so the deterministic analyzer can still reject hallucinated references.
     """
     stats = {
         "empty_groups": 0,
         "empty_attributes": 0,
         "scalar_candidate_ids": 0,
-        "deduped_candidate_ids": 0,
+        "cleaned_candidate_ids": 0,
         "dropped_unanchored_items": 0,
         "normalized_evidence_refs": 0,
         "dropped_empty_recommendations": 0,
+        "dropped_invalid_recommendations": 0,
         "normalized_recommendation_item_ids": 0,
     }
 
@@ -284,8 +288,8 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
                 normalized_items.append(item)
                 continue
 
-            value = item.get("technical_attributes")
-            if value is None or value == []:
+            attributes = item.get("technical_attributes")
+            if attributes is None or attributes == []:
                 item["technical_attributes"] = {}
                 stats["empty_attributes"] += 1
 
@@ -296,9 +300,9 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
             elif candidate_ids is None:
                 item["candidate_ids"] = []
             elif isinstance(candidate_ids, list):
-                normalized_ids, removed = _dedupe_string_list(candidate_ids)
+                normalized_ids, removed = _normalize_string_list(candidate_ids)
                 item["candidate_ids"] = normalized_ids
-                stats["deduped_candidate_ids"] += removed
+                stats["cleaned_candidate_ids"] += removed
 
             if isinstance(item.get("candidate_ids"), list) and not item["candidate_ids"]:
                 stats["dropped_unanchored_items"] += 1
@@ -312,7 +316,7 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
                 item["evidence_refs"] = [evidence_refs.strip()] if evidence_refs.strip() else []
                 stats["normalized_evidence_refs"] += 1
             elif isinstance(evidence_refs, list):
-                normalized_refs, removed = _dedupe_string_list(evidence_refs)
+                normalized_refs, removed = _normalize_string_list(evidence_refs)
                 if removed or normalized_refs != evidence_refs:
                     item["evidence_refs"] = normalized_refs
                     stats["normalized_evidence_refs"] += 1
@@ -328,8 +332,15 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
         normalized_recommendations: list[object] = []
         for recommendation in recommendations:
             if not isinstance(recommendation, dict):
-                normalized_recommendations.append(recommendation)
+                stats["dropped_invalid_recommendations"] += 1
                 continue
+
+            scenario = recommendation.get("scenario")
+            summary = recommendation.get("summary")
+            if scenario not in RECOMMENDATION_SCENARIOS or not isinstance(summary, str) or not summary.strip():
+                stats["dropped_invalid_recommendations"] += 1
+                continue
+
             item_ids = recommendation.get("item_ids")
             if isinstance(item_ids, str):
                 recommendation["item_ids"] = [item_ids.strip()] if item_ids.strip() else []
@@ -338,7 +349,7 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
                 recommendation["item_ids"] = []
                 stats["normalized_recommendation_item_ids"] += 1
             elif isinstance(item_ids, list):
-                normalized_item_ids, removed = _dedupe_string_list(item_ids)
+                normalized_item_ids, removed = _normalize_string_list(item_ids)
                 if removed or normalized_item_ids != item_ids:
                     recommendation["item_ids"] = normalized_item_ids
                     stats["normalized_recommendation_item_ids"] += 1
@@ -352,19 +363,16 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
     return stats
 
 
-def _dedupe_string_list(values: list[object]) -> tuple[list[object], int]:
-    result: list[object] = []
+def _normalize_string_list(values: list[object]) -> tuple[list[str], int]:
+    result: list[str] = []
     seen: set[str] = set()
     removed = 0
     for value in values:
         if not isinstance(value, str):
-            result.append(value)
-            continue
-        cleaned = value.strip()
-        if not cleaned:
             removed += 1
             continue
-        if cleaned in seen:
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
             removed += 1
             continue
         seen.add(cleaned)
