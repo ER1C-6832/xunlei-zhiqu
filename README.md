@@ -9,8 +9,8 @@
 - **Stage A：已完成** — Monorepo、三端可运行骨架、环境变量与 ModelProviderAdapter。
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
 - **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实 OpenAI-compatible 节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
-- **Stage D：进行中，D1-D5 已完成** — 普通用户 UI、本地常驻自动发现、资源扩展名 Registry、全 DOM 强信号发现、Network Media、批量图片均已落地；D6 EvidenceReducer / 节点 A 压缩与缓存尚未开始。
-- **Stage E：下一大阶段** — Stage D 完成后接入真实 Download Engine、真实进度和轻量质检。
+- **Stage D：已完成** — 普通用户 UI、本地常驻自动发现、资源扩展名 Registry、全 DOM 强信号发现、Network Media、批量图片、EvidenceReducer、节点 A 压缩规划、usage/latency 日志和轻量 ResourcePlan 内存缓存均已落地。
+- **Stage E：下一阶段** — 接入真实 Download Engine、真实进度和轻量质检。
 
 ## 当前已实现
 
@@ -25,13 +25,13 @@
 - “整理整个网页”覆盖完整 DOM，适合 Oracle JDK 等超长、多版本下载页；
 - 所有候选路径都允许先查看候选，再由用户明确点击“智能分析”调用真实节点 A；
 - 节点 A 完成后可一键定位真实网页中的推荐资源；
-- 普通 UI 不展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念；
+- 普通 UI 不展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念。
 
 #### D2 / D4 自动发现
 
-- 用户可控的页面自动发现，默认不开启；
+- 用户可控的页面自动发现；
 - 开启后使用初次扫描 + `MutationObserver` + 防抖重新索引；
-- D4 已从 viewport 发现升级为**完整 DOM 的高置信资源发现**；
+- 自动模式扫描完整 DOM 的高置信资源；
 - 红点数量只统计强资源信号：Registry 已知资源扩展名、Magnet、`download` 属性、`video/audio/source`、明确媒体 manifest、被动观察到的网络媒体；
 - 普通 `download.php`、未知 page URL、仅附近出现 download 文案的导航链接不会仅凭文本进入红点；
 - 自动发现全过程只在本地运行，不构造 EvidencePack、不调用 LLM；
@@ -45,7 +45,7 @@
 - 大小写匹配不敏感；
 - Registry 同时供框选、主动扫描、整页扫描和自动发现使用；
 - `.bin` / `.dds` / `.stl` / `.dat` / `.cbr` / `.cbz` 等歧义扩展只提供本地 family hint；
-- `ResourceType` 已扩展为 `software/document/video/audio/image/subtitle/model/design/archive/disk_image/mixed/unknown`；
+- `ResourceType` 为 `software/document/video/audio/image/subtitle/model/design/archive/disk_image/mixed/unknown`；
 - `.m3u8` 与 `.mpd` 作为媒体 manifest 候选进入 Registry。
 
 #### D5 Network Media
@@ -75,7 +75,11 @@
 - `OpenAICompatibleProvider` + 显式开发 `FixtureProvider`；
 - DashScope / DeepSeek V4 JSON Mode 兼容；
 - EvidencePack 可接收 Extension Registry hint、网络媒体事实、blob 动态媒体标记和图片尺寸/来源等安全技术 metadata；
-- 模型只能引用已有 Candidate ID，返回后有确定性引用校验；
+- D6 `EvidenceReducer` 在模型前进一步压缩脱敏事实：自动模式降低低置信 page/navigation、缩短 `nearby_text`、去重重复上下文，并把高重复签名/校验/SBOM 聚成 evidence group，同时保留全部原 Candidate ID；
+- 节点 A Prompt 明确要求把几十个候选压成少量用户可选组，不再逐候选生成长卡片；
+- 模型只能引用已有 Candidate ID，返回后仍有确定性引用校验；
+- Runtime 日志记录 raw candidate、AI evidence group、evidence chars、input/output/cached tokens、cache hit、latency 和 model，不记录敏感 URL；
+- bounded in-memory ResourcePlan cache，默认 20 分钟 TTL / 64 条，相同脱敏证据 + 模型 + Prompt 版本短时间重复分析不再调用模型；
 - ResourceJob 创建、列表、暂停 / 恢复；
 - 链接库收藏 / 历史；
 - 当前 Job Store 仍为进程内轻量状态。
@@ -88,20 +92,21 @@
 - Runtime 任务快照刷新、暂停 / 恢复；
 - 任务详情中的目标、选择、问题、下一步；
 - 链接库收藏 / 历史；
-- Stage D 暂停继续扩张 Task Center UI，只保证能正确接收新 ResourceJob。
+- Stage D 没有继续扩张 Task Center UI，只保证能正确接收新 ResourceJob。
 
-## Stage D 当前边界
+## Stage D 完成边界
 
-**D1-D5 已完成，当前停在 D5。** 下一步只有 D6，不应在 D5 验收前继续：
+Stage D 已收口在“强发现 + 简单 UI + 节点 A 产品化”，仍然**不包含**：
 
-- EvidenceReducer / EvidenceCompiler；
-- 去重复上下文与辅助文件 evidence group；
-- 节点 A Prompt 压缩与“不要为每个候选生成一张卡片”的规划约束；
-- raw candidate / AI group count / token usage / latency 日志；
-- bounded in-memory ResourcePlan cache；
-- Python 这类 20~60 候选页面的输入 Token 明显降低。
+- 真实 HTTP Download Engine；
+- BT / Magnet 下载执行；
+- 节点 B；
+- SQLite / 完整 ResourceGraph / 事件溯源；
+- 视觉模型；
+- 微服务或复杂 AI Gateway；
+- 大量 pytest / Playwright。
 
-Stage D 仍不实现真实下载执行、BT 下载、SQLite、节点 B、完整 ResourceGraph、视觉模型或大量测试。
+下一步 Stage E 才开始真实下载执行。
 
 ## 环境要求
 
@@ -130,7 +135,9 @@ MODEL_API_KEY=your-local-runtime-key
 MODEL_CONNECT_TIMEOUT_SECONDS=10
 MODEL_READ_TIMEOUT_SECONDS=120
 MODEL_WRITE_TIMEOUT_SECONDS=30
-MODEL_MAX_COMPLETION_TOKENS=8192
+MODEL_MAX_COMPLETION_TOKENS=4096
+PLAN_CACHE_TTL_SECONDS=1200
+PLAN_CACHE_MAX_ENTRIES=64
 ```
 
 Fixture 只能显式开发开启：
@@ -139,6 +146,22 @@ Fixture 只能显式开发开启：
 MODEL_PROVIDER=fixture
 ENABLE_FIXTURE_PROVIDER=true
 ```
+
+## D6 性能观察
+
+每次真实节点 A 分析完成后，Runtime 会输出类似：
+
+```text
+node_a_analysis model=deepseek-v4-flash candidate_raw_count=40 candidate_ai_count=18 evidence_chars=7200 input_tokens=3600 output_tokens=1200 cached_tokens=0 cache_hit=false latency_ms=8200 dropped_navigation=7 grouped_candidates=15 context_count=3
+```
+
+同一份脱敏证据短时间重复分析命中 Runtime 本地缓存时：
+
+```text
+cache_hit=true input_tokens=0 output_tokens=0
+```
+
+这比单纯看 `prompt_chars` 更适合判断真实成本和等待时间。目标是 Python / Oracle 这类 20~60 原始候选页面相较 Stage C/D5 明显降低输入与输出规模；如果某个真实页面为了准确性需要更高 Token，可以接受，不以硬阈值牺牲资源选择质量。
 
 ## 开发启动
 
@@ -168,7 +191,7 @@ apps/extension/dist
 
 ## 拉取更新后的检查 / 构建
 
-Stage D 每一步优先保护生产代码构建，不追求测试覆盖率：
+优先保护生产代码构建，不追求测试覆盖率：
 
 ```powershell
 git pull --rebase origin main
@@ -177,7 +200,7 @@ corepack pnpm --filter @xunlei-zhiqu/extension build
 uv run --project services/runtime python -m compileall services/runtime/src
 ```
 
-D5 新增了 `webRequest` 权限，重新构建后需要在 `chrome://extensions/` / `edge://extensions/` 对扩展点一次“重新加载”，并刷新待测试网页。
+D5 使用了 `webRequest` 权限，重新构建后需要在 `chrome://extensions/` / `edge://extensions/` 对扩展点一次“重新加载”，并刷新待测试网页。
 
 任务中心生产地址：
 
