@@ -23,6 +23,7 @@ class HttpTimingBreakdown:
     response_close_ms: int
     transport_unattributed_ms: int
     provider_reported_ms: int | None
+    server_timing: str | None
     connection_reused: bool
     http_version: str
     response_bytes: int
@@ -72,7 +73,10 @@ class HttpTraceRecorder:
             phase = event_name[: -len(suffix)]
             started = self._starts.get(phase)
             if started is not None:
-                self._durations[phase] = max(0, int((now - started) * 1000))
+                duration = max(0, int((now - started) * 1000))
+                # Proxy CONNECT/TLS flows may repeat the same httpcore phase. Sum
+                # them instead of silently keeping only the final occurrence.
+                self._durations[phase] = self._durations.get(phase, 0) + duration
 
     def finish(self, response: httpx.Response, *, http_total_ms: int) -> HttpTimingBreakdown:
         dispatch_ms = 0
@@ -114,7 +118,8 @@ class HttpTraceRecorder:
             + response_close_ms
         )
         unattributed_ms = max(0, http_total_ms - known)
-        provider_reported_ms = _server_timing_ms(response.headers.get("server-timing"))
+        server_timing = response.headers.get("server-timing")
+        provider_reported_ms = _single_server_timing_ms(server_timing)
         response_bytes = len(response.content)
         http_version = response.http_version or "unknown"
         connection_reused = tcp_ms == 0 and tls_ms == 0
@@ -131,6 +136,7 @@ class HttpTraceRecorder:
             response_close_ms=response_close_ms,
             transport_unattributed_ms=unattributed_ms,
             provider_reported_ms=provider_reported_ms,
+            server_timing=server_timing,
             connection_reused=connection_reused,
             http_version=http_version,
             response_bytes=response_bytes,
@@ -143,10 +149,12 @@ class HttpTraceRecorder:
         return sum(self._durations.get(phase, 0) for phase in phases)
 
 
-def _server_timing_ms(value: str | None) -> int | None:
+def _single_server_timing_ms(value: str | None) -> int | None:
     if not value:
         return None
     durations = [float(match) for match in _SERVER_TIMING_DUR_RE.findall(value)]
-    if not durations:
+    # Multiple Server-Timing metrics may overlap. Do not add them and pretend the
+    # total is model compute. Preserve the raw header instead.
+    if len(durations) != 1:
         return None
-    return int(sum(durations))
+    return int(durations[0])
