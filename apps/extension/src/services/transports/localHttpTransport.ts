@@ -33,8 +33,13 @@ export class LocalHttpTransport implements ZhiquServiceTransport {
   }
 
   analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions): Promise<ResourcePlan> {
-    const suffix = options?.forceRefresh ? '?refresh=true' : '';
-    return this.postJson<ResourcePlan>(`/v1/capture/analyze${suffix}`, batch, '智能分析失败');
+    const forceRefresh = options?.forceRefresh === true;
+    const suffix = forceRefresh ? '?refresh=true' : '';
+    return this.postJson<ResourcePlan>(
+      `/v1/capture/analyze${suffix}`,
+      batch,
+      forceRefresh ? '重新智能分析失败' : '智能分析失败'
+    );
   }
 
   createJob(request: ResourceJobCreateRequest): Promise<ResourceJobSnapshot> {
