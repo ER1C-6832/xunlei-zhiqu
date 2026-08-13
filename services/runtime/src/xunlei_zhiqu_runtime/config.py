@@ -30,7 +30,7 @@ class Settings(BaseSettings):
         "wire3",
         "latency",
     ] = "quality"
-    node_a_latency_model: str = "qwen3.6-flash"
+    node_a_latency_model: str = "qwen-flash"
     plan_cache_ttl_seconds: float = 1200.0
     plan_cache_max_entries: int = 64
     runtime_host: str = "127.0.0.1"
