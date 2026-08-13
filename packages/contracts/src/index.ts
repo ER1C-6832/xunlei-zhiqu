@@ -7,6 +7,7 @@ export type CaptureChannel =
   | 'image'
   | 'manual';
 export type DeliveryTarget = 'local' | 'cloud';
+export type ZhiquRuntimeKind = 'demo_local' | 'client' | 'cloud_analysis' | 'none';
 export type ResourceType =
   | 'software'
   | 'document'
@@ -20,6 +21,16 @@ export type ResourceType =
   | 'disk_image'
   | 'mixed'
   | 'unknown';
+
+export interface ZhiquCapabilities {
+  schema_version: '0.1';
+  localDiscovery: true;
+  intelligentAnalysis: boolean;
+  localDownload: boolean;
+  cloudDelivery: boolean;
+  reacquisition: boolean;
+  runtimeKind: ZhiquRuntimeKind;
+}
 
 export interface DomRect {
   x: number;
