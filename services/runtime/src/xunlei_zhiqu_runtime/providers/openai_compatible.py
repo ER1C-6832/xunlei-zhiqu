@@ -18,7 +18,7 @@ from xunlei_zhiqu_runtime.providers.base import (
 
 
 logger = logging.getLogger("uvicorn.error")
-PROMPT_VERSION = "stage-d6-v1"
+PROMPT_VERSION = "stage-d6-v2"
 PLAN_ITEM_GROUPS = ("selected", "alternatives", "excluded", "uncertainties")
 RECOMMENDATION_SCENARIOS = {"current_device", "compatibility", "quality", "small_size", "manual"}
 
@@ -32,12 +32,19 @@ SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型�
 5. 根据明确事实给少量、可修改的推荐；证据不足才放 uncertainty。
 
 安全与证据规则：
-- 不猜隐藏意图。设备信息只是兼容证据，不是唯一目标。
+- 不猜隐藏意图。设备信息是明确提供的兼容证据，可以用于“当前设备”的默认推荐，但不代表用户最终只能选择该平台。
 - 只能用 EvidencePack 事实，不得编造 URL、版本、平台、架构、语言、清晰度、大小、哈希或兼容性。
 - 只能引用 EvidencePack 中已有 candidate id。一个 evidence entry 的 candidate_ids 可能包含多个原始候选，这些 ID 都可被 PlanItem 引用；绝不能生成新 ID。
 - ResourcePlan 是建议，不是用户最终决定。
 - resource_family_hint 只是本地 hint；ambiguous=true 时必须结合文件名、上下文、MIME 与技术元数据。
 - candidate_type=page 不是自动排除理由。
+
+默认推荐约束：
+- selected 必须优先代表用户真正要获取的主资源。若存在安装包、媒体文件、文档、模型权重等主资源，不得把签名、校验、SBOM、GPG、checksum 等验证附件作为唯一 selected。
+- evidence_group_hint=signature_or_verification_files 或 attachment_kind=verification 的条目只能作为附件组；除非整批证据本身就没有任何主资源，否则不要放入 selected。
+- 当 device.os / device.arch 已知，且 EvidencePack 中存在明确匹配当前系统/架构的主资源时，selected 至少包含一个匹配当前设备的主资源。不得只推荐其他操作系统、源码包或验证附件。
+- 对普通终端用户的软件发布页，如果存在当前设备可直接使用的安装包/压缩包，源码包应放 alternatives，而不是作为唯一默认推荐。
+- 其他平台仍应保留在 alternatives，用户可以自行修改最终选择。
 
 压缩原则：
 - 不要为每个候选生成一张卡片。用途相同、差异不影响决策时，用一个 PlanItem.candidate_ids[] 聚合多个候选。
@@ -126,8 +133,12 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
     async def analyze_with_metrics(self, evidence_pack: EvidencePack) -> ModelAnalysisResult:
         started = time.perf_counter()
         request_document = {
-            "task": "把这批候选整理成少量用户可选择的资源组，解释关键差异并给出可修改推荐。",
-            "evidence_pack": evidence_pack.model_dump(mode="json", exclude_none=True),
+            "task": "把这批候选整理成少量用户可选择的资源组，优先给出与当前设备兼容的主资源，解释关键差异并给出可修改推荐。",
+            "evidence_pack": evidence_pack.model_dump(
+                mode="json",
+                exclude_none=True,
+                exclude_defaults=True,
+            ),
             "output_contract": OUTPUT_CONTRACT,
         }
         user_content = json.dumps(
