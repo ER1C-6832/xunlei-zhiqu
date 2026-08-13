@@ -11,6 +11,11 @@ from xunlei_zhiqu_runtime.providers.output_wire import (
     WIRE2_SYSTEM_SUFFIX,
     expand_compact_resource_plan,
 )
+from xunlei_zhiqu_runtime.providers.output_wire3 import (
+    WIRE3_OUTPUT_CONTRACT,
+    WIRE3_SYSTEM_SUFFIX,
+    expand_positional_resource_plan,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -104,6 +109,14 @@ def _wire2_normalizer(parsed: dict[str, object]) -> dict[str, int]:
     return _BASE_NORMALIZER(parsed)
 
 
+def _wire3_normalizer(parsed: dict[str, object]) -> dict[str, int]:
+    # Positional wire3 first; then accept wire2 short-key objects as a graceful
+    # fallback if the model partially ignores the stricter positional contract.
+    expand_positional_resource_plan(parsed)
+    expand_compact_resource_plan(parsed)
+    return _BASE_NORMALIZER(parsed)
+
+
 def create_provider(settings: Settings) -> ModelProviderAdapter:
     if settings.model_provider == "fixture":
         if not settings.enable_fixture_provider:
@@ -139,6 +152,17 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             openai_compatible.OUTPUT_CONTRACT = WIRE2_OUTPUT_CONTRACT
             openai_compatible.PROMPT_VERSION = "stage-d6-wire2-v1"
             openai_compatible._normalize_model_resource_plan = _wire2_normalizer
+            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+            use_wire = True
+        elif settings.node_a_profile == "wire3":
+            # Cost-first A/B from wire2: keep identical evidence compaction and
+            # correctness rules, but remove repeated item keys from model output
+            # using a positional-array transport. Runtime expands it before all
+            # existing validation and deterministic quality guards.
+            openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE3_SYSTEM_SUFFIX}"
+            openai_compatible.OUTPUT_CONTRACT = WIRE3_OUTPUT_CONTRACT
+            openai_compatible.PROMPT_VERSION = "stage-d6-wire3-v1"
+            openai_compatible._normalize_model_resource_plan = _wire3_normalizer
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
             use_wire = True
         elif settings.node_a_profile == "compact":
