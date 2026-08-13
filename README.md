@@ -10,7 +10,7 @@
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
 - **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、用户最终确认与 ResourceJob 创建。
 - **Stage D：已完成** — 本地常驻发现、Resource Extension Registry、全 DOM 强信号发现、Network Media、批量图片、EvidenceReducer、节点 A 压缩协议、缓存、模型供应商适配边界和细粒度 HTTP latency trace。
-- **Stage E0：进行中** — **Wave A / E0.1~E0.9 已完成**：Extension、Task Center、Runtime、模型入口和未来 Download Engine 已建立可替换接缝；下一步进入 **Wave B：Node A Performance（E0.10~E0.15）**。
+- **Stage E0：进行中** — **Wave A / E0.1~E0.9 已完成；Wave B / E0.10~E0.15 已完成**。架构迁移接缝和 Node A 性能基线已经冻结；下一步进入 **Wave C：Progressive Analysis UX（E0.16~E0.22）**。
 - **Stage E：E0 完成后进入** — 接入真实 DownloadExecutor、真实进度、暂停/恢复/Range 与轻量持久化。
 
 ## 当前架构边界
@@ -211,6 +211,50 @@ VITE_RUNTIME_SESSION=dev-session-value
 
 `VITE_RUNTIME_SESSION` 仅用于验证当前静态 token 接缝，**不是生产持久凭证**。未来生产 session 必须由客户端 Native Messaging / authenticated localhost handshake 等方式动态建立，而不是固化进前端 bundle。
 
+## Wave B：Node A Performance
+
+E0.10~E0.15 已完成内部 streaming diagnostics、供应商 SSE 归一化、固定脱敏 benchmark、model/provider/profile A/B、connection reuse / HTTP/2 观测和独立 `pipeline_v3`。
+
+产品路径仍只接收完整、合法、已通过 Pydantic 和 deterministic guards 的 `ResourcePlan`；streaming 只用于测量 TTFT / generation，不把半截 JSON 暴露给 UI。
+
+### 推荐稳定配置
+
+当前经过真实 DashScope benchmark 的推荐组合：
+
+```dotenv
+MODEL_PROVIDER=dashscope
+MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MODEL_NAME=deepseek-v4-flash
+NODE_A_PROFILE=pipeline_v3
+MODEL_STREAM_DIAGNOSTICS=false
+MODEL_HTTP2_ENABLED=false
+```
+
+`pipeline` 保留为 v2 回滚 profile。`pipeline_v3` 的推荐结论只覆盖当前实测的 DashScope + `deepseek-v4-flash`；换供应商或模型必须重新跑固定 benchmark，不能因为协议兼容就自动继承性能/质量结论。
+
+### Wave B 数据结论
+
+固定 Python / JDK / image 样本的 9 次 HTTP/1.1 A/B：
+
+| 指标（中位数） | pipeline v2 | pipeline v3 | 变化 |
+|---|---:|---:|---:|
+| input tokens | 1348 | 1236 | -8.3% |
+| output tokens | 533 | 459 | -13.9% |
+| TTFT | 906 ms | 862 ms | -4.9% |
+| generation | 5220 ms | 4823 ms | -7.6% |
+| total | 6257 ms | 5637 ms | -9.9% |
+| ResourcePlan validation | 100% | 100% | 持平 |
+
+v3 初次 A/B 的唯一明确质量回退集中在图片原图/preview 偏好；增加仅基于已有 `possible_original=true` 证据的窄规则后，image-only 复测 5/5 均选择原图，validation 5/5。首请求连接复用正确报告为 `false`，随后 4 次为 `true`，修正了此前用 0ms duration 推断复用造成的误报。
+
+性能画像也已明确：DeepSeek V4 当前总延迟的大头是 **首 token 之后的 generation**，不是 Runtime 本地 JSON/Pydantic/guard，也不是连接握手。继续为了几百 token 牺牲 ResourcePlan 质量没有价值，因此 Wave B 不再继续 pipeline_v4 微压缩。
+
+Qwen Flash 虽然 TTFT/总延迟明显更低，但在当前任务中出现空 selected、漏顶层字段、错误 item reference 等问题，固定 benchmark 的选择质量不足，因此不进入稳定配置。
+
+HTTP/2 在当前 DashScope + 代理路径上能够实际协商为 HTTP/2，但不同 profile 的延迟收益方向不一致，并受到供应商隐式 prefix cache / 请求顺序影响；没有证据支持把它设为产品默认值，故继续保持关闭。
+
+本地 `ResourcePlanCache` smoke 始终命中且 lookup 约为 0ms；供应商 cached tokens 可降低计费输入，但不能保证 generation/total latency 同比例下降。
+
 ## 浏览器扩展 `apps/extension`
 
 Stage D 已有：
@@ -235,7 +279,7 @@ E0 Wave A 在这些能力之上只增加迁移/隐私/身份接缝，没有重�
 
 - FastAPI Demo Runtime；
 - Sanitized EvidencePack + EvidenceReducer；
-- `quality / fast / wire / wire2 / pipeline` Node-A protocol profile；
+- `quality / fast / wire / wire2 / pipeline / pipeline_v3` Node-A protocol profile；
 - provider-neutral StructuredChatProvider；
 - OpenAI / DashScope / Generic OpenAI-compatible API adapter；
 - deterministic ResourcePlan validation / device compatibility guard；
@@ -246,9 +290,9 @@ E0 Wave A 在这些能力之上只增加迁移/隐私/身份接缝，没有重�
 - `ClientSessionAuthPort` + off/static-token fixture；
 - 当前 Job Store 仍为进程内 Demo 状态。
 
-### D6 HTTP latency trace
+### Node A latency diagnostics
 
-客户端可观测模型 HTTP 阶段继续保留：
+客户端可观测 HTTP 阶段继续保留：
 
 ```text
 dispatch_ms
@@ -264,7 +308,20 @@ client_transport_ms
 provider_reported_ms
 ```
 
-`upstream_wait_ms` 仍只表示“请求发出后到响应头”的客户端观测值，包含 WAN、供应商 Gateway/排队与模型处理；不能在供应商没有 telemetry 时假装成纯模型推理时间。Wave B 会通过 streaming diagnostics 真正拆 TTFT / generation / total。
+Wave B 额外提供 diagnostic-only streaming 指标：
+
+```text
+time_to_first_byte_ms
+time_to_first_content_ms
+generation_ms
+stream_total_ms
+output_tokens_per_second
+chunk_count
+connection_reused
+http_version
+```
+
+`upstream_wait_ms` 仍只表示“请求发出后到响应头”的客户端观测值，包含 WAN、供应商 Gateway/排队与模型处理；TTFT / generation 也只是客户端观测窗口，不能在供应商没有 telemetry 时假装成纯模型 compute。
 
 ## Task Center `apps/task-center`
 
@@ -279,7 +336,7 @@ provider_reported_ms
 
 ## 当前仍然不做
 
-Wave A 没有提前实现：
+Stage E0 尚未提前实现：
 
 - 真实 HTTP Download Engine / Range；
 - BT / Magnet 下载执行；
@@ -309,7 +366,7 @@ uv sync --project services/runtime
 Copy-Item .env.example .env
 ```
 
-模型 Key 永远只写 Runtime 本地 `.env`。DashScope + DeepSeek Demo 例如：
+模型 Key 永远只写 Runtime 本地 `.env`。DashScope + DeepSeek 当前推荐 Demo 例如：
 
 ```dotenv
 MODEL_PROVIDER=dashscope
@@ -318,7 +375,9 @@ MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MODEL_NAME=deepseek-v4-flash
 MODEL_API_KEY=your-local-runtime-key
 
-NODE_A_PROFILE=pipeline
+NODE_A_PROFILE=pipeline_v3
+MODEL_STREAM_DIAGNOSTICS=false
+MODEL_HTTP2_ENABLED=false
 MODEL_CONNECT_TIMEOUT_SECONDS=10
 MODEL_READ_TIMEOUT_SECONDS=120
 MODEL_WRITE_TIMEOUT_SECONDS=30
@@ -397,7 +456,7 @@ Chrome / Edge 旁加载目录：
 apps/extension/dist
 ```
 
-## Wave A 收口检查
+## Wave A / Wave B 收口检查
 
 统一检查命令：
 
@@ -411,51 +470,9 @@ corepack pnpm --filter @xunlei-zhiqu/task-center build
 Select-String -Path .\apps\extension\dist\content.js -Pattern '^\s*import'
 
 uv run --project services/runtime python -m compileall services/runtime/src
-uv run --project services/runtime pytest services/runtime/tests/test_e0_architecture_seams.py -q
+uv run --project services/runtime pytest services/runtime/tests/test_e0_architecture_seams.py services/runtime/tests/test_e0_node_a_performance.py -q
 
 node --experimental-strip-types scripts/check_e0_cloud_privacy.mts
 ```
 
-`Select-String` 必须无输出，继续保护 MV3 `content.js` 自包含约束。Wave A 的测试只保护 Cloud privacy、Runtime session 和 executor seam，不追覆盖率。
-
-## 下一 Wave
-
-Wave B 连续处理 E0.10~E0.15：
-
-```text
-Provider streaming diagnostics
-→ TTFT / generation / total
-→ connection reuse / HTTP2 benchmark
-→ 固定 Evidence benchmark
-→ model/provider/profile A/B
-→ pipeline v3 低风险输入/输出收缩
-```
-
-`pipeline_v2`/当前稳定 `pipeline` 不会被实验直接覆盖；先拿真实性能与正确性数据，再决定稳定配置。
-
-## 本地入口
-
-任务中心：
-
-```text
-http://127.0.0.1:8765/app/
-```
-
-API 文档：
-
-```text
-http://127.0.0.1:8765/docs
-```
-
-## 目录
-
-```text
-apps/extension          Manifest V3 迅雷智取扩展
-apps/task-center        迅雷 17 风格 React 任务中心
-services/runtime        FastAPI Runtime
-packages/contracts      最小跨模块 TypeScript 契约
-docs/blueprint          当前产品和架构事实来源
-docs/adr                高成本决策与边界说明
-scripts                 开发/契约检查脚本
-demo                    受控资源页与故障场景
-```
+`Select-String` 必须无输出，继续保护 MV3 `content.js` 自包含约束。E0 测试只保护高价值架构/隐私/协议 seam，不追覆盖率。
