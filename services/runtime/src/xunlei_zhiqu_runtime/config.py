@@ -16,11 +16,21 @@ class Settings(BaseSettings):
     model_read_timeout_seconds: float = 120.0
     model_write_timeout_seconds: float = 30.0
     # Stage D6 A/B profiles: quality is the correctness baseline; fast is the
-    # latency baseline; wire is the input-cost baseline; wire2 adds short output
-    # keys; wire3 continues from wire2 with positional output arrays. compact is
-    # retained only to reproduce the failed compact-v1 experiment.
+    # original latency baseline; wire/wire2 are the proven cost lineage.
+    # latency keeps the proven wire2 protocol but swaps only the model so model
+    # decode/service latency can be measured independently. wire3/compact are
+    # retained only so failed experiments remain reproducible.
     model_max_completion_tokens: int = 4096
-    node_a_profile: Literal["quality", "fast", "compact", "wire", "wire2", "wire3"] = "quality"
+    node_a_profile: Literal[
+        "quality",
+        "fast",
+        "compact",
+        "wire",
+        "wire2",
+        "wire3",
+        "latency",
+    ] = "quality"
+    node_a_latency_model: str = "qwen3.6-flash"
     plan_cache_ttl_seconds: float = 1200.0
     plan_cache_max_entries: int = 64
     runtime_host: str = "127.0.0.1"
