@@ -132,7 +132,7 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
         )
         system_prompt = f"{_FAST_SYSTEM_PROMPT}{PIPELINE_SYSTEM_SUFFIX}\noutput_contract={compact_contract}"
         output_contract = PIPELINE_OUTPUT_CONTRACT
-        prompt_version = "stage-d6-pipeline-v1"
+        prompt_version = "stage-d6-pipeline-v2"
         normalizer = _wire2_normalizer
         request_builder = build_pipeline_request
         max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
