@@ -25,13 +25,15 @@ class Settings(BaseSettings):
     # E0.10: stream internally to measure TTFT/generation. The validated
     # ResourcePlan remains the only product output.
     model_stream_diagnostics: bool = False
-    # E0 Wave B benchmark switch. Keep false by default; HTTP/2 is accepted only
-    # if measurements show a real benefit on the configured endpoint/proxy path.
+    # E0 Wave B found no stable HTTP/2 benefit on the tested DashScope/proxy path.
+    # Keep false by default and re-benchmark per deployment path.
     model_http2_enabled: bool = False
 
     # Node-A protocol profiles are our own A/B surface. They must not select a
-    # supplier or model. wire2 is the proven cost/speed baseline; pipeline only
-    # optimizes Runtime-owned model transport.
+    # supplier or model. `pipeline_v3` is the Wave B recommendation for the
+    # tested DashScope + deepseek-v4-flash path; `pipeline` remains its v2
+    # rollback profile. The generic default stays `quality` so an unbenchmarked
+    # provider/model does not silently inherit a provider-specific conclusion.
     node_a_profile: Literal[
         "quality",
         "fast",
