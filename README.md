@@ -10,7 +10,7 @@
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
 - **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
 - **Stage D：已完成** — 普通用户 UI、本地常驻自动发现、资源扩展名 Registry、全 DOM 强信号发现、Network Media、批量图片、EvidenceReducer、节点 A 压缩规划、缓存、模型供应商适配边界和细粒度 HTTP latency 诊断。
-- **Stage E0：进行中** — 生产迁移接缝、Node A 性能诊断与分析等待体验收口；**E0.1 已完成**：Extension 通过 `ZhiquServiceClient` 使用 Runtime 能力，当前 Demo HTTP 地址和 `/v1` 路由只存在于 `LocalHttpTransport`。
+- **Stage E0：进行中** — 生产迁移接缝、Node A 性能诊断与分析等待体验收口；**E0.1 + E0.2 已完成**：Extension 已通过 `ZhiquServiceClient` 隔离部署细节，并通过 `CapabilityResolver` 按能力而不是 endpoint 决定智能分析、下载与交付动作。
 - **Stage E：E0 完成后进入** — 接入真实 Download Engine、真实进度和轻量质检。
 
 ## 三层边界
@@ -19,7 +19,7 @@
 Browser Extension
       |
       v
-ZhiquServiceClient
+ZhiquServiceClient <----- CapabilityResolver (E0.2 fixture)
       |
       v
 LocalHttpTransport (Demo) -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contracts -- Task Center
@@ -34,7 +34,9 @@ LocalHttpTransport (Demo) -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contrac
 ```
 
 - Extension 负责采集、页面联动和用户显式操作，不持有模型 Key；产品 UI 只调用 `ZhiquServiceClient` 的语义方法，不拼 Runtime URL 或 `/v1/*` 路由；
-- 当前 `LocalHttpTransport` 是 Demo 部署适配层，独占 `VITE_RUNTIME_URL`、localhost 默认值、HTTP 路由和 Task Center URL；未来 Client/Cloud transport 不要求改写 React 产品逻辑；
+- `ZhiquServiceClient.getCapabilities()` 给产品逻辑返回当前能力；StageD 与批量图片 UI 不根据 localhost 是否存在来猜功能；
+- 当前 `CapabilityResolver` 使用环境 fixture 模拟 `LOCAL_ONLY / CLIENT_RUNTIME / CLOUD_ANALYSIS` 等形态；这一步只验证能力决策，不代表真实 ClientTransport 或 CloudAnalysisTransport 已实现；
+- 当前 `LocalHttpTransport` 仍是 Demo 部署适配层，独占 `VITE_RUNTIME_URL`、localhost 默认值、HTTP 路由和 Task Center URL；未来 Client/Cloud transport 不要求改写 React 产品逻辑；
 - Task Center 目前只消费 Runtime 的任务/链接库 API，不承载资源判断；其独立 `TaskServiceClient` 属于 E0.5；
 - Runtime 构建脱敏 EvidencePack、调用节点 A、做确定性校验并创建 ResourceJob；
 - `NODE_A_PROFILE` 只控制我们自己的 Prompt / Evidence wire / ResourcePlan wire，不选择供应商或模型；
@@ -60,7 +62,36 @@ LocalHttpTransport (Demo) -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contrac
 - E0.1 新增 `services/zhiquServiceClient.ts` + `services/transports/localHttpTransport.ts`：分析、创建 ResourceJob、批量图片任务、收藏和打开任务中心统一经过语义客户端；
 - StageD React UI 与批量图片 UI 不再直接 `fetch` Runtime，也不知道 `127.0.0.1:8765` 和具体 `/v1` 路径；
 - `VITE_RUNTIME_URL` 只由 `LocalHttpTransport` 读取；旧的 Vite 源码字符串替换注入已删除；
+- E0.2 新增 `ZhiquCapabilities`、`CapabilityResolver` 与 `useZhiquCapabilities`；智能分析、本地下载、云盘交付、任务中心相关动作都按 capability 决策；
+- capability resolver 失败时保守降级为 local-only，本地扫描/框选/自动发现仍可工作；
 - 旧 StageC Side Panel 实现已经退出 active path 并删除，避免维护第二条直连 Runtime 的 UI 链路；模型 Key 永远不进入扩展。
+
+#### E0.2 Capability Resolver
+
+公开轻量能力契约：
+
+```ts
+interface ZhiquCapabilities {
+  schema_version: '0.1';
+  localDiscovery: true;
+  intelligentAnalysis: boolean;
+  localDownload: boolean;
+  cloudDelivery: boolean;
+  reacquisition: boolean;
+  runtimeKind: 'demo_local' | 'client' | 'cloud_analysis' | 'none';
+}
+```
+
+当前可通过 `VITE_ZHIQU_CAPABILITY_MODE` 模拟四种形态：
+
+| Fixture | 分析 | 本地下载 | 云盘交付 | 重新智取 | 用途 |
+|---|---:|---:|---:|---:|---|
+| `demo_local` | 是 | 是 | 是 | 否 | 当前本地 Demo，默认值 |
+| `client_runtime` | 是 | 是 | 是 | 是 | 模拟未来迅雷客户端 Runtime 能力 |
+| `cloud_analysis` | 是 | 否 | 否 | 否 | 模拟无客户端、只有云端 Node A 分析能力 |
+| `local_only` | 否 | 否 | 否 | 否 | 只有 Extension 本地发现 |
+
+这里的 `client_runtime` / `cloud_analysis` **只模拟 capability**。E0.2 尚未实现真正 Native Messaging、客户端探测、CloudAnalysisTransport、迅雷登录或 Guest Credential；实际业务请求仍走当前 `LocalHttpTransport`。后续步骤会在不改 UI 业务语义的前提下逐一替换这些接缝。
 
 #### D2 / D4 自动发现
 
@@ -99,7 +130,7 @@ LocalHttpTransport (Demo) -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contrac
 - 用户主动进入后扫描 `<img src>`、`srcset`、`picture/source`、链接原图和 CSS `background-image`；
 - 展示图片尺寸、格式、来源方式与“可能原图”提示；
 - 支持全部 / 大图 / 可能原图筛选；
-- 最多选择 50 张 HTTP/HTTPS 图片，经 `ZhiquServiceClient.createManualJob()` 创建现有普通 ResourceJob 并打开任务中心；
+- 最多选择 50 张 HTTP/HTTPS 图片；只有 capability 提供 `localDownload` 时才允许创建现有普通 ResourceJob 并打开任务中心；
 - 图片扫描本身不调用 LLM。
 
 ### Runtime `services/runtime`
@@ -160,7 +191,7 @@ response_bytes
 - 链接库收藏 / 历史；
 - Stage D 没有继续扩张 Task Center UI，只保证能正确接收新 ResourceJob；
 - 开发默认调用本地 Runtime；生产 build 未设置 `VITE_RUNTIME_URL` 时使用 `window.location.origin`，因此可由本地或远端 Runtime 同源托管；分离部署时显式设置 `VITE_RUNTIME_URL`；
-- Task Center 目前仍直接使用 HTTP 地址/路由，计划在 E0.5 收口进 `TaskServiceClient`，不在 E0.1 偷跑该步骤。
+- Task Center 目前仍直接使用 HTTP 地址/路由，计划在 E0.5 收口进 `TaskServiceClient`；E0.2 不提前修改它。
 
 ## Stage E0 当前边界
 
@@ -183,7 +214,7 @@ Browser Extension
 
 而不推翻 Node A、ResourceJob、Agent 编排和 UI 产品逻辑。
 
-当前只完成 **E0.1**。下一步是 E0.2 Capability Resolver；尚未实现 Cloud Analysis、DownloadExecutorPort、Native Messaging、Runtime 鉴权或 streaming analysis。
+当前已完成 **E0.1 ZhiquServiceClient** 和 **E0.2 Capability Resolver**。下一步是 **E0.3 AnalysisCredential 边界**；尚未实现真正 Cloud Analysis transport、DownloadExecutorPort、Native Messaging、Runtime 鉴权或 streaming analysis。
 
 Stage E0 / Stage D 仍然**不包含**：
 
@@ -251,13 +282,25 @@ ENABLE_FIXTURE_PROVIDER=true
 
 ## 部署配置
 
-Extension 本地开发无需额外配置。E0.1 后 Runtime 地址只由 `LocalHttpTransport` 读取；React 产品组件不再读取该变量，也不再依赖 Vite 的源码字符串替换。构建给其他 Runtime endpoint 时，在 `apps/extension/.env.local` 或 shell 中设置：
+Extension 本地开发默认保持当前 Demo 能力。在 `apps/extension/.env.local` 或 shell 中可以配置：
 
 ```dotenv
-VITE_RUNTIME_URL=https://runtime.example.com
+VITE_RUNTIME_URL=http://127.0.0.1:8765
+VITE_ZHIQU_CAPABILITY_MODE=demo_local
 ```
 
-Task Center 开发默认 `http://127.0.0.1:8765`；生产 build 默认同源。若前端和 Runtime 分离部署，在 `apps/task-center/.env.local` 设置同名变量。
+`VITE_RUNTIME_URL` 只由 `LocalHttpTransport` 读取；React 产品组件不读取该变量。`VITE_ZHIQU_CAPABILITY_MODE` 只用于 E0.2 capability fixture，可选：
+
+```text
+demo_local
+client_runtime
+cloud_analysis
+local_only
+```
+
+切换 fixture 后需要重新 build / reload Extension。`client_runtime` / `cloud_analysis` 不会在 E0.2 自动切换到未来 transport。
+
+Task Center 开发默认 `http://127.0.0.1:8765`；生产 build 未设置 `VITE_RUNTIME_URL` 时使用同源。若前端和 Runtime 分离部署，在 `apps/task-center/.env.local` 设置同名变量。
 
 远端 Task Center Origin 还需要加入 Runtime：
 
@@ -324,7 +367,7 @@ corepack pnpm --filter @xunlei-zhiqu/extension build
 uv run --project services/runtime python -m compileall services/runtime/src
 ```
 
-D5 使用了 `webRequest` 权限，重新构建后需要在 `chrome://extensions/` / `edge://extensions/` 对扩展点一次“重新加载”，并刷新待测试网页。
+E0.2 只修改 TypeScript/Extension 边界，没有修改 Python Runtime；本轮验收可重点运行 `pnpm typecheck` 与 Extension build。D5 使用了 `webRequest` 权限，重新构建后需要在 `chrome://extensions/` / `edge://extensions/` 对扩展点一次“重新加载”，并刷新待测试网页。
 
 任务中心生产地址（本地 Demo）：
 
