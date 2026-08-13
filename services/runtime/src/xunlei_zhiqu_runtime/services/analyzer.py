@@ -24,46 +24,68 @@ class CaptureAnalyzer:
 
     async def analyze(self, batch: CaptureBatch, *, force_refresh: bool = False) -> ResourcePlan:
         started = time.perf_counter()
+
+        compile_started = time.perf_counter()
         compiled = compile_evidence_pack(batch)
         evidence_pack = compiled.pack
         evidence_chars = len(
             json.dumps(
-                evidence_pack.model_dump(mode="json", exclude_none=True),
+                evidence_pack.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                ),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
         )
+        compile_ms = _elapsed_ms(compile_started)
 
         cache_key = None
+        cache_ms = 0
         if self._cache is not None:
+            cache_started = time.perf_counter()
             cache_key = self._cache.make_key(
                 evidence_pack,
                 namespace=self._provider.cache_namespace,
             )
-            if not force_refresh:
-                cached_plan = self._cache.get(cache_key, batch_id=evidence_pack.batch_id)
-                if cached_plan is not None:
-                    _validate_plan_references(cached_plan, evidence_pack)
-                    _validate_recommendation_quality(cached_plan, evidence_pack)
-                    self._log_analysis(
-                        compiled=compiled.stats,
-                        evidence_chars=evidence_chars,
-                        input_tokens=0,
-                        output_tokens=0,
-                        cached_tokens=0,
-                        cache_hit=True,
-                        force_refresh=False,
-                        latency_ms=int((time.perf_counter() - started) * 1000),
-                    )
-                    return cached_plan
+            cached_plan = None if force_refresh else self._cache.get(cache_key, batch_id=evidence_pack.batch_id)
+            cache_ms += _elapsed_ms(cache_started)
+            if cached_plan is not None:
+                guard_started = time.perf_counter()
+                _validate_plan_references(cached_plan, evidence_pack)
+                _validate_recommendation_quality(cached_plan, evidence_pack)
+                guard_ms = _elapsed_ms(guard_started)
+                self._log_analysis(
+                    compiled=compiled.stats,
+                    evidence_chars=evidence_chars,
+                    input_tokens=0,
+                    output_tokens=0,
+                    cached_tokens=0,
+                    cache_hit=True,
+                    force_refresh=False,
+                    latency_ms=_elapsed_ms(started),
+                    compile_ms=compile_ms,
+                    cache_ms=cache_ms,
+                    provider_ms=0,
+                    guard_ms=guard_ms,
+                )
+                return cached_plan
 
         result = await self._provider.analyze_with_metrics(evidence_pack)
         plan = result.plan
+
+        guard_started = time.perf_counter()
         _validate_plan_references(plan, evidence_pack)
         _validate_recommendation_quality(plan, evidence_pack)
-        if self._cache is not None and cache_key is not None:
-            self._cache.put(cache_key, plan)
+        guard_ms = _elapsed_ms(guard_started)
 
+        if self._cache is not None and cache_key is not None:
+            cache_started = time.perf_counter()
+            self._cache.put(cache_key, plan)
+            cache_ms += _elapsed_ms(cache_started)
+
+        total_ms = _elapsed_ms(started)
         self._log_analysis(
             compiled=compiled.stats,
             evidence_chars=evidence_chars,
@@ -72,7 +94,11 @@ class CaptureAnalyzer:
             cached_tokens=result.metrics.cached_tokens,
             cache_hit=False,
             force_refresh=force_refresh,
-            latency_ms=int((time.perf_counter() - started) * 1000),
+            latency_ms=total_ms,
+            compile_ms=compile_ms,
+            cache_ms=cache_ms,
+            provider_ms=result.metrics.latency_ms,
+            guard_ms=guard_ms,
         )
         return plan
 
@@ -87,10 +113,16 @@ class CaptureAnalyzer:
         cache_hit: bool,
         force_refresh: bool,
         latency_ms: int,
+        compile_ms: int,
+        cache_ms: int,
+        provider_ms: int,
+        guard_ms: int,
     ) -> None:
+        local_overhead_ms = max(0, latency_ms - provider_ms)
         logger.info(
             "node_a_analysis model=%s candidate_raw_count=%d candidate_ai_count=%d evidence_chars=%d "
             "input_tokens=%s output_tokens=%s cached_tokens=%s cache_hit=%s force_refresh=%s latency_ms=%d "
+            "compile_ms=%d cache_ms=%d provider_ms=%d guard_ms=%d local_overhead_ms=%d "
             "dropped_navigation=%d grouped_candidates=%d context_count=%d",
             self._provider.model_name,
             compiled.raw_count,
@@ -102,6 +134,11 @@ class CaptureAnalyzer:
             str(cache_hit).lower(),
             str(force_refresh).lower(),
             latency_ms,
+            compile_ms,
+            cache_ms,
+            provider_ms,
+            guard_ms,
+            local_overhead_ms,
             compiled.dropped_navigation,
             compiled.grouped_candidates,
             compiled.context_count,
@@ -278,3 +315,7 @@ def _identity_text(candidate: EvidenceCandidate) -> str:
         )
         if isinstance(value, str) and value
     )
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
