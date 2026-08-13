@@ -61,6 +61,7 @@ class HttpTraceRecorder:
     def __init__(self) -> None:
         self.started_at = time.perf_counter()
         self._starts: dict[str, float] = {}
+        self._started_phases: set[str] = set()
         self._durations: dict[str, int] = {}
         self._first_event_at: float | None = None
 
@@ -73,6 +74,7 @@ class HttpTraceRecorder:
         if event_name.endswith(".started"):
             phase = event_name[: -len(".started")]
             self._starts[phase] = now
+            self._started_phases.add(phase)
             return
 
         if event_name.endswith(".complete") or event_name.endswith(".failed"):
@@ -139,7 +141,13 @@ class HttpTraceRecorder:
             except httpx.ResponseNotRead:
                 response_bytes = 0
         http_version = response.http_version or "unknown"
-        connection_reused = tcp_ms == 0 and tls_ms == 0
+        # Duration may round to 0 ms for a real local-proxy/TCP/TLS setup. Reuse
+        # is therefore event-based: a request is reused only when no connection
+        # establishment phase occurred at all.
+        connection_reused = not any(
+            phase in self._started_phases
+            for phase in ("connection.connect_tcp", "connection.start_tls")
+        )
 
         return HttpTimingBreakdown(
             http_total_ms=http_total_ms,
