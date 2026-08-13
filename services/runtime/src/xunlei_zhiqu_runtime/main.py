@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await provider.aclose()
 
 
+_boot_settings = get_settings()
 app = FastAPI(
     title="迅雷智取 Runtime",
     version=__version__,
@@ -65,12 +66,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "http://127.0.0.1:8765",
-        "http://localhost:8765",
-    ],
+    allow_origins=_boot_settings.cors_origins,
     allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
