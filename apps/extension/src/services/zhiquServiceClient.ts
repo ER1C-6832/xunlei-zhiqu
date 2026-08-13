@@ -5,8 +5,10 @@ import type {
   ManualJobCreateRequest,
   ResourceJobCreateRequest,
   ResourceJobSnapshot,
-  ResourcePlan
+  ResourcePlan,
+  ZhiquCapabilities
 } from '@xunlei-zhiqu/contracts';
+import { resolveFixtureZhiquCapabilities } from './capabilityResolver';
 import { LocalHttpTransport } from './transports/localHttpTransport';
 
 export type TaskCenterTarget = 'downloads' | 'links';
@@ -14,6 +16,8 @@ export type TaskCenterTarget = 'downloads' | 'links';
 export type AnalyzeResourcesOptions = {
   forceRefresh?: boolean;
 };
+
+export type ZhiquCapabilityResolver = () => Promise<ZhiquCapabilities> | ZhiquCapabilities;
 
 export interface ZhiquServiceTransport {
   analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions): Promise<ResourcePlan>;
@@ -24,6 +28,7 @@ export interface ZhiquServiceTransport {
 }
 
 export interface ZhiquServiceClient {
+  getCapabilities(): Promise<ZhiquCapabilities>;
   analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions): Promise<ResourcePlan>;
   createJob(request: ResourceJobCreateRequest): Promise<ResourceJobSnapshot>;
   createManualJob(request: ManualJobCreateRequest): Promise<ResourceJobSnapshot>;
@@ -32,7 +37,14 @@ export interface ZhiquServiceClient {
 }
 
 export class DefaultZhiquServiceClient implements ZhiquServiceClient {
-  constructor(private readonly transport: ZhiquServiceTransport) {}
+  constructor(
+    private readonly transport: ZhiquServiceTransport,
+    private readonly capabilityResolver: ZhiquCapabilityResolver = resolveFixtureZhiquCapabilities
+  ) {}
+
+  async getCapabilities(): Promise<ZhiquCapabilities> {
+    return this.capabilityResolver();
+  }
 
   analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions) {
     return this.transport.analyzeResources(batch, options);
