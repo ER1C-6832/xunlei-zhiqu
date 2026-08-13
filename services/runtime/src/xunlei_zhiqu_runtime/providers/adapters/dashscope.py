@@ -14,9 +14,9 @@ class DashScopeProviderAdapter(ProviderApiAdapter):
 
     def request_overrides(self, *, model: str) -> dict[str, object]:
         lowered = model.strip().lower()
-        # DeepSeek V4 on DashScope may emit reasoning_content instead of the final
-        # JSON when thinking is enabled. Node A requires direct structured output.
-        if lowered.startswith("deepseek-v4"):
+        # Node A requires direct structured output. Keep thinking-capable model
+        # switches here instead of teaching Runtime orchestration model names.
+        if lowered.startswith("deepseek-v4") or lowered.startswith("qwen3.6"):
             return {"enable_thinking": False}
         return {}
 
