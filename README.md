@@ -9,31 +9,39 @@
 - **Stage A：已完成** — Monorepo、三端可运行骨架、环境变量与 ModelProviderAdapter。
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
 - **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
-- **Stage D：已完成并在收口** — 普通用户 UI、本地常驻自动发现、资源扩展名 Registry、全 DOM 强信号发现、Network Media、批量图片、EvidenceReducer、节点 A 压缩规划、缓存、模型供应商适配边界和细粒度 HTTP latency 诊断。
-- **Stage E：下一阶段** — 接入真实 Download Engine、真实进度和轻量质检。
+- **Stage D：已完成** — 普通用户 UI、本地常驻自动发现、资源扩展名 Registry、全 DOM 强信号发现、Network Media、批量图片、EvidenceReducer、节点 A 压缩规划、缓存、模型供应商适配边界和细粒度 HTTP latency 诊断。
+- **Stage E0：进行中** — 生产迁移接缝、Node A 性能诊断与分析等待体验收口；**E0.1 已完成**：Extension 通过 `ZhiquServiceClient` 使用 Runtime 能力，当前 Demo HTTP 地址和 `/v1` 路由只存在于 `LocalHttpTransport`。
+- **Stage E：E0 完成后进入** — 接入真实 Download Engine、真实进度和轻量质检。
 
 ## 三层边界
 
 ```text
-Browser Extension -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contracts -- Task Center
-                                          |
-                                          v
-                               ModelProviderAdapter
-                                          |
-                                  StructuredChatProvider
-                                          |
-                                  ProviderApiAdapter
-                         / openai / dashscope / generic
+Browser Extension
+      |
+      v
+ZhiquServiceClient
+      |
+      v
+LocalHttpTransport (Demo) -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contracts -- Task Center
+                                                        |
+                                                        v
+                                             ModelProviderAdapter
+                                                        |
+                                                StructuredChatProvider
+                                                        |
+                                                ProviderApiAdapter
+                                       / openai / dashscope / generic
 ```
 
-- Extension 负责采集、页面联动和用户显式操作，不持有模型 Key；
-- Task Center 只消费 Runtime 的任务/链接库 API，不承载资源判断；
+- Extension 负责采集、页面联动和用户显式操作，不持有模型 Key；产品 UI 只调用 `ZhiquServiceClient` 的语义方法，不拼 Runtime URL 或 `/v1/*` 路由；
+- 当前 `LocalHttpTransport` 是 Demo 部署适配层，独占 `VITE_RUNTIME_URL`、localhost 默认值、HTTP 路由和 Task Center URL；未来 Client/Cloud transport 不要求改写 React 产品逻辑；
+- Task Center 目前只消费 Runtime 的任务/链接库 API，不承载资源判断；其独立 `TaskServiceClient` 属于 E0.5；
 - Runtime 构建脱敏 EvidencePack、调用节点 A、做确定性校验并创建 ResourceJob；
 - `NODE_A_PROFILE` 只控制我们自己的 Prompt / Evidence wire / ResourcePlan wire，不选择供应商或模型；
 - `MODEL_PROVIDER` 只选择 API 方言适配器，`MODEL_NAME` 单独选择模型；
 - Demo 可以由 Runtime 静态托管 Task Center；这是部署便利，不是代码依赖。
 
-详细决策见 `docs/adr/0001-runtime-boundaries-and-model-adapters.md`。
+详细模型/部署边界见 `docs/adr/0001-runtime-boundaries-and-model-adapters.md`。Stage E0 后续会补充客户端 Runtime 与 Cloud Analysis 的生产迁移 ADR。
 
 ## 当前已实现
 
@@ -49,7 +57,10 @@ Browser Extension -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contracts -- Ta
 - 所有候选路径都允许先查看候选，再由用户明确点击“智能分析”调用节点 A；
 - 节点 A 完成后可一键定位真实网页中的推荐资源；
 - 普通 UI 不展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念；
-- Runtime 地址属于部署配置：本地默认 `127.0.0.1:8765`，构建时可通过 `VITE_RUNTIME_URL` 指向远端 Runtime/Gateway；模型 Key 永远不进入扩展。
+- E0.1 新增 `services/zhiquServiceClient.ts` + `services/transports/localHttpTransport.ts`：分析、创建 ResourceJob、批量图片任务、收藏和打开任务中心统一经过语义客户端；
+- StageD React UI 与批量图片 UI 不再直接 `fetch` Runtime，也不知道 `127.0.0.1:8765` 和具体 `/v1` 路径；
+- `VITE_RUNTIME_URL` 只由 `LocalHttpTransport` 读取；旧的 Vite 源码字符串替换注入已删除；
+- 旧 StageC Side Panel 实现已经退出 active path 并删除，避免维护第二条直连 Runtime 的 UI 链路；模型 Key 永远不进入扩展。
 
 #### D2 / D4 自动发现
 
@@ -88,7 +99,7 @@ Browser Extension -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contracts -- Ta
 - 用户主动进入后扫描 `<img src>`、`srcset`、`picture/source`、链接原图和 CSS `background-image`；
 - 展示图片尺寸、格式、来源方式与“可能原图”提示；
 - 支持全部 / 大图 / 可能原图筛选；
-- 最多选择 50 张 HTTP/HTTPS 图片直接创建现有普通 ResourceJob 并跳转任务中心；
+- 最多选择 50 张 HTTP/HTTPS 图片，经 `ZhiquServiceClient.createManualJob()` 创建现有普通 ResourceJob 并打开任务中心；
 - 图片扫描本身不调用 LLM。
 
 ### Runtime `services/runtime`
@@ -148,11 +159,33 @@ response_bytes
 - 任务详情中的目标、选择、问题、下一步；
 - 链接库收藏 / 历史；
 - Stage D 没有继续扩张 Task Center UI，只保证能正确接收新 ResourceJob；
-- 开发默认调用本地 Runtime；生产 build 未设置 `VITE_RUNTIME_URL` 时使用 `window.location.origin`，因此可由本地或远端 Runtime 同源托管；分离部署时显式设置 `VITE_RUNTIME_URL`。
+- 开发默认调用本地 Runtime；生产 build 未设置 `VITE_RUNTIME_URL` 时使用 `window.location.origin`，因此可由本地或远端 Runtime 同源托管；分离部署时显式设置 `VITE_RUNTIME_URL`；
+- Task Center 目前仍直接使用 HTTP 地址/路由，计划在 E0.5 收口进 `TaskServiceClient`，不在 E0.1 偷跑该步骤。
 
-## Stage D 完成边界
+## Stage E0 当前边界
 
-Stage D 已收口在“强发现 + 简单 UI + 节点 A 产品化”，仍然**不包含**：
+E0 的目标是让今天的：
+
+```text
+Browser Extension
+→ localhost FastAPI Runtime
+→ Demo Task Center
+```
+
+未来能够迁移为：
+
+```text
+Browser Extension
+→ 迅雷客户端 Runtime
+→ 迅雷真实下载引擎
+→ 迅雷 AI Gateway
+```
+
+而不推翻 Node A、ResourceJob、Agent 编排和 UI 产品逻辑。
+
+当前只完成 **E0.1**。下一步是 E0.2 Capability Resolver；尚未实现 Cloud Analysis、DownloadExecutorPort、Native Messaging、Runtime 鉴权或 streaming analysis。
+
+Stage E0 / Stage D 仍然**不包含**：
 
 - 真实 HTTP Download Engine；
 - BT / Magnet 下载执行；
@@ -160,9 +193,10 @@ Stage D 已收口在“强发现 + 简单 UI + 节点 A 产品化”，仍然**�
 - SQLite / 完整 ResourceGraph / 事件溯源；
 - 视觉模型；
 - 微服务或真正的云端 AI Gateway；
+- 真正 Native Messaging / 迅雷账号登录；
 - 大量 pytest / Playwright。
 
-下一步 Stage E 才开始真实下载执行。
+Stage E0 完成后才进入 Stage E 的真实下载执行。
 
 ## 环境要求
 
@@ -217,7 +251,7 @@ ENABLE_FIXTURE_PROVIDER=true
 
 ## 部署配置
 
-Extension 本地开发无需额外配置。以后构建给远端 Runtime 时，在 `apps/extension/.env.local` 或 shell 中设置：
+Extension 本地开发无需额外配置。E0.1 后 Runtime 地址只由 `LocalHttpTransport` 读取；React 产品组件不再读取该变量，也不再依赖 Vite 的源码字符串替换。构建给其他 Runtime endpoint 时，在 `apps/extension/.env.local` 或 shell 中设置：
 
 ```dotenv
 VITE_RUNTIME_URL=https://runtime.example.com
@@ -241,7 +275,7 @@ RUNTIME_CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,https://task-ce
 node_a_analysis model=deepseek-v4-flash candidate_raw_count=25 candidate_ai_count=13 input_tokens=3129 output_tokens=494 cache_hit=false latency_ms=6897 ...
 ```
 
-细粒度模型 HTTP 调用新增：
+细粒度模型 HTTP 调用：
 
 ```text
 node_a_http_trace api_provider=dashscope model=deepseek-v4-flash http_version=HTTP/1.1 connection_reused=true dispatch_ms=... tcp_connect_ms=... tls_handshake_ms=... request_headers_ms=... request_body_ms=... upstream_wait_ms=... response_body_ms=... response_close_ms=... transport_unattributed_ms=... client_transport_ms=... provider_reported_ms=... response_bytes=...
