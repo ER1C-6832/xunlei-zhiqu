@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     model_read_timeout_seconds: float = 120.0
     model_write_timeout_seconds: float = 30.0
     model_max_completion_tokens: int = 4096
+    # E0.10: stream internally to measure TTFT/generation. The validated
+    # ResourcePlan remains the only product output.
+    model_stream_diagnostics: bool = False
+    # E0 Wave B benchmark switch. Keep false by default; HTTP/2 is accepted only
+    # if measurements show a real benefit on the configured endpoint/proxy path.
+    model_http2_enabled: bool = False
 
     # Node-A protocol profiles are our own A/B surface. They must not select a
     # supplier or model. wire2 is the proven cost/speed baseline; pipeline only
@@ -32,6 +38,7 @@ class Settings(BaseSettings):
         "wire",
         "wire2",
         "pipeline",
+        "pipeline_v3",
     ] = "quality"
 
     plan_cache_ttl_seconds: float = 1200.0

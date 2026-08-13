@@ -31,12 +31,15 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
     key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
 
     logger.info(
-        "node_a_profile profile=%s prompt_version=%s api_provider=%s model=%s max_completion_tokens=%d",
+        "node_a_profile profile=%s prompt_version=%s api_provider=%s model=%s "
+        "max_completion_tokens=%d stream_diagnostics=%s http2_enabled=%s",
         profile.name,
         profile.prompt_version,
         api_adapter.name,
         settings.model_name,
         profile.max_completion_tokens,
+        str(settings.model_stream_diagnostics).lower(),
+        str(settings.model_http2_enabled).lower(),
     )
 
     provider: ModelProviderAdapter = StructuredChatProvider(
@@ -53,5 +56,7 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
         prompt_version=profile.prompt_version,
         normalizer=profile.normalizer,
         request_builder=profile.request_builder,
+        stream_diagnostics=settings.model_stream_diagnostics,
+        http2_enabled=settings.model_http2_enabled,
     )
     return EvidenceWireProvider(provider) if profile.use_evidence_wire else provider

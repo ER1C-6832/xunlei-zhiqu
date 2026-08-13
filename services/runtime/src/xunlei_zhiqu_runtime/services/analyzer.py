@@ -4,7 +4,7 @@ import re
 import time
 
 from xunlei_zhiqu_runtime.models import CaptureBatch, EvidenceCandidate, EvidencePack, ResourcePlan
-from xunlei_zhiqu_runtime.providers.base import ModelProviderAdapter
+from xunlei_zhiqu_runtime.providers.base import ModelCallMetrics, ModelProviderAdapter
 from xunlei_zhiqu_runtime.services.evidence import compile_evidence_pack
 from xunlei_zhiqu_runtime.services.plan_cache import ResourcePlanCache
 
@@ -56,6 +56,7 @@ class CaptureAnalyzer:
                 _validate_plan_references(cached_plan, evidence_pack)
                 _validate_recommendation_quality(cached_plan, evidence_pack)
                 guard_ms = _elapsed_ms(guard_started)
+                total_ms = _elapsed_ms(started)
                 self._log_analysis(
                     compiled=compiled.stats,
                     evidence_chars=evidence_chars,
@@ -64,10 +65,18 @@ class CaptureAnalyzer:
                     cached_tokens=0,
                     cache_hit=True,
                     force_refresh=False,
-                    latency_ms=_elapsed_ms(started),
+                    latency_ms=total_ms,
                     compile_ms=compile_ms,
                     cache_ms=cache_ms,
                     provider_ms=0,
+                    guard_ms=guard_ms,
+                )
+                self._log_perf(
+                    compiled=compiled.stats,
+                    metrics=None,
+                    cache_hit=True,
+                    total_ms=total_ms,
+                    compile_ms=compile_ms,
                     guard_ms=guard_ms,
                 )
                 return cached_plan
@@ -98,6 +107,14 @@ class CaptureAnalyzer:
             compile_ms=compile_ms,
             cache_ms=cache_ms,
             provider_ms=result.metrics.latency_ms,
+            guard_ms=guard_ms,
+        )
+        self._log_perf(
+            compiled=compiled.stats,
+            metrics=result.metrics,
+            cache_hit=False,
+            total_ms=total_ms,
+            compile_ms=compile_ms,
             guard_ms=guard_ms,
         )
         return plan
@@ -142,6 +159,47 @@ class CaptureAnalyzer:
             compiled.dropped_navigation,
             compiled.grouped_candidates,
             compiled.context_count,
+        )
+
+    def _log_perf(
+        self,
+        *,
+        compiled,
+        metrics: ModelCallMetrics | None,
+        cache_hit: bool,
+        total_ms: int,
+        compile_ms: int,
+        guard_ms: int,
+    ) -> None:
+        logger.info(
+            "node_a_perf provider=%s model=%s raw_candidates=%d ai_candidates=%d "
+            "input_tokens=%s output_tokens=%s cached_tokens=%s ttft_ms=%s generation_ms=%s "
+            "total_ms=%d tokens_per_second=%s cache_hit=%s connection_reused=%s http_version=%s "
+            "compile_ms=%d validate_ms=%d validated=true",
+            self._provider.name,
+            self._provider.model_name,
+            compiled.raw_count,
+            compiled.ai_count,
+            _metric(metrics.input_tokens if metrics else 0),
+            _metric(metrics.output_tokens if metrics else 0),
+            _metric(metrics.cached_tokens if metrics else 0),
+            _metric(metrics.time_to_first_content_ms if metrics else None),
+            _metric(metrics.generation_ms if metrics else None),
+            total_ms,
+            (
+                f"{metrics.output_tokens_per_second:.1f}"
+                if metrics and metrics.output_tokens_per_second is not None
+                else "n/a"
+            ),
+            str(cache_hit).lower(),
+            (
+                str(metrics.connection_reused).lower()
+                if metrics and metrics.connection_reused is not None
+                else "n/a"
+            ),
+            metrics.http_version if metrics and metrics.http_version else "n/a",
+            compile_ms,
+            guard_ms,
         )
 
 
@@ -315,6 +373,10 @@ def _identity_text(candidate: EvidenceCandidate) -> str:
         )
         if isinstance(value, str) and value
     )
+
+
+def _metric(value: object | None) -> str:
+    return "n/a" if value is None else str(value)
 
 
 def _elapsed_ms(started: float) -> int:

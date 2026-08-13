@@ -61,6 +61,21 @@ Task Center product code depends on `TaskServiceClient` and public `ResourceJobS
 
 Production can later add an `XunleiGatewayProviderAdapter` without making CaptureAnalyzer branch on Qwen, DeepSeek, OpenAI or any supplier hostname.
 
+### Model Gateway proximity principle
+
+A future 迅雷 AI Gateway should be placed and routed with model-provider proximity in mind. The intended production path is:
+
+```text
+Client Runtime
+  -> 迅雷 AI Gateway
+     -> regional/provider egress
+        -> model supplier
+```
+
+The Gateway is the right place for account identity and entitlement, quota/rate limiting, model routing and fallback, shared prompt/cache policy, prompt-version control and cost/latency telemetry. When possible, its provider-facing egress should be regionally close to the selected model supplier so the Gateway does not add an avoidable second long WAN leg.
+
+This does **not** imply that a Gateway can remove the user's Client -> Gateway WAN latency, nor that client-observed TTFT can be labeled as pure model compute. Stage E0 only records the deployment principle; it does not implement a cloud Gateway.
+
 ### Download boundary
 
 ResourceJob execution calls `DownloadExecutorPort`:
@@ -94,6 +109,7 @@ A future client may establish the session through Chrome Native Messaging or aut
 - Cloud analysis cannot accidentally inherit the privacy properties of local `CaptureBatch`; it must cross an explicit sanitizer contract.
 - Task Center no longer assumes it is talking directly to localhost HTTP from page components.
 - Node A model suppliers and the future 迅雷 AI Gateway remain behind one Runtime semantic port.
+- A production AI Gateway can centralize identity/routing/cache/cost policy without forcing supplier logic back into Runtime; regional provider egress should be benchmarked rather than assumed.
 - Real download execution can begin in Stage E behind a frozen port while keeping raw sources Runtime-internal.
 - Client-session authentication can be enabled without editing every React request call.
 

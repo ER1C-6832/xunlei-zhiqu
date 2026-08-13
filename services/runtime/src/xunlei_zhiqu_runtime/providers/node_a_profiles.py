@@ -11,6 +11,12 @@ from xunlei_zhiqu_runtime.providers.output_wire import (
     WIRE2_SYSTEM_SUFFIX,
     expand_compact_resource_plan,
 )
+from xunlei_zhiqu_runtime.providers.pipeline_v3 import (
+    PIPELINE_V3_OUTPUT_CONTRACT,
+    PIPELINE_V3_SYSTEM_SUFFIX,
+    build_pipeline_v3_request,
+    expand_pipeline_v3_resource_plan,
+)
 from xunlei_zhiqu_runtime.providers.pipeline_wire import (
     PIPELINE_OUTPUT_CONTRACT,
     PIPELINE_SYSTEM_SUFFIX,
@@ -93,6 +99,14 @@ def _wire2_normalizer(parsed: dict[str, object]) -> dict[str, int]:
     return _BASE_NORMALIZER(parsed)
 
 
+def _pipeline_v3_normalizer(parsed: dict[str, object]) -> dict[str, int]:
+    stats = expand_pipeline_v3_resource_plan(parsed)
+    base_stats = _BASE_NORMALIZER(parsed)
+    for key, value in base_stats.items():
+        stats[key] = stats.get(key, 0) + value
+    return stats
+
+
 def build_node_a_profile(*, profile: str, max_completion_tokens: int) -> NodeAProfileSpec:
     """Build our Node-A protocol independently from supplier/model selection."""
     if profile == "quality":
@@ -154,6 +168,22 @@ def build_node_a_profile(*, profile: str, max_completion_tokens: int) -> NodeAPr
             prompt_version="stage-d6-pipeline-v2",
             normalizer=_wire2_normalizer,
             request_builder=build_pipeline_request,
+            max_completion_tokens=bounded_tokens,
+            use_evidence_wire=True,
+        )
+    if profile == "pipeline_v3":
+        compact_contract = json.dumps(
+            PIPELINE_V3_OUTPUT_CONTRACT,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return NodeAProfileSpec(
+            name=profile,
+            system_prompt=f"{_FAST_SYSTEM_PROMPT}{PIPELINE_V3_SYSTEM_SUFFIX}\noutput_contract={compact_contract}",
+            output_contract=PIPELINE_V3_OUTPUT_CONTRACT,
+            prompt_version="stage-e0-pipeline-v3-v1",
+            normalizer=_pipeline_v3_normalizer,
+            request_builder=build_pipeline_v3_request,
             max_completion_tokens=bounded_tokens,
             use_evidence_wire=True,
         )

@@ -20,6 +20,12 @@ class DashScopeProviderAdapter(ProviderApiAdapter):
             return {"enable_thinking": False}
         return {}
 
+    def stream_request_overrides(self, *, model: str) -> dict[str, object]:
+        del model
+        # Model Studio's OpenAI-compatible stream returns usage in a terminal
+        # event when explicitly requested. Parsing remains provider-neutral.
+        return {"stream_options": {"include_usage": True}}
+
     def empty_content_hint(self, *, model: str, reasoning_chars: int) -> str | None:
         if reasoning_chars:
             return (

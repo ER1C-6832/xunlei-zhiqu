@@ -30,25 +30,32 @@ class HttpTimingBreakdown:
 
     @property
     def client_transport_ms(self) -> int:
+        """Client-side transport/setup overhead, excluding remote wait windows.
+
+        In buffered calls response_body_ms is usually tiny. In a streaming call it
+        spans the complete model generation stream, so counting it as local client
+        cost would incorrectly blame the Runtime for provider/network wait time.
+        Keep response_body_ms as its own observable instead.
+        """
         return (
             self.dispatch_ms
             + self.tcp_connect_ms
             + self.tls_handshake_ms
             + self.request_headers_ms
             + self.request_body_ms
-            + self.response_body_ms
             + self.response_close_ms
             + self.transport_unattributed_ms
         )
 
 
 class HttpTraceRecorder:
-    """Collect low-level httpcore timing events for a single HTTPX request.
+    """Collect low-level httpcore timing events for one HTTPX request.
 
     `upstream_wait_ms` is the wait from entering receive-response-headers until
     response headers arrive. It contains WAN RTT + provider gateway/queue/model
-    time. Unless the provider returns Server-Timing, a client cannot truthfully
-    split those remote components further.
+    work before headers. In streaming mode, `response_body_ms` is also a wait
+    window that includes provider generation and network delivery; it is not
+    classified as local Runtime overhead.
     """
 
     def __init__(self) -> None:
@@ -78,7 +85,13 @@ class HttpTraceRecorder:
                 # them instead of silently keeping only the final occurrence.
                 self._durations[phase] = self._durations.get(phase, 0) + duration
 
-    def finish(self, response: httpx.Response, *, http_total_ms: int) -> HttpTimingBreakdown:
+    def finish(
+        self,
+        response: httpx.Response,
+        *,
+        http_total_ms: int,
+        response_bytes: int | None = None,
+    ) -> HttpTimingBreakdown:
         dispatch_ms = 0
         if self._first_event_at is not None:
             dispatch_ms = max(0, int((self._first_event_at - self.started_at) * 1000))
@@ -120,7 +133,11 @@ class HttpTraceRecorder:
         unattributed_ms = max(0, http_total_ms - known)
         server_timing = response.headers.get("server-timing")
         provider_reported_ms = _single_server_timing_ms(server_timing)
-        response_bytes = len(response.content)
+        if response_bytes is None:
+            try:
+                response_bytes = len(response.content)
+            except httpx.ResponseNotRead:
+                response_bytes = 0
         http_version = response.http_version or "unknown"
         connection_reused = tcp_ms == 0 and tls_ms == 0
 

@@ -1,0 +1,254 @@
+[
+  {
+    "name": "python_release",
+    "expected_selected_any": ["py_win_x64_exe"],
+    "forbidden_selected": ["py_source", "py_verification_sha", "py_verification_sig"],
+    "evidence_pack": {
+      "schema_version": "0.1",
+      "batch_id": "bench_python_release",
+      "page": {
+        "title": "Python 3.12.10 release files",
+        "relevant_sections": ["Windows", "macOS", "Source release", "Verification"]
+      },
+      "selection": {
+        "type": "automatic",
+        "candidate_ids": ["py_win_x64_exe", "py_win_x86_exe", "py_macos_pkg", "py_source", "py_verification_sha", "py_verification_sig"]
+      },
+      "device": {"os": "windows", "arch": "x64", "locale": "zh-CN"},
+      "candidates": [
+        {
+          "id": "py_win_x64_exe",
+          "candidate_type": "file",
+          "display_name": "Windows installer (64-bit)",
+          "filename": "python-3.12.10-amd64.exe",
+          "extension": "exe",
+          "anchor_text": "Windows installer (64-bit)",
+          "nearby_text": "Recommended Windows installer for 64-bit systems.",
+          "section_heading": "Windows",
+          "technical_metadata": {"resource_family_hint": "software", "platform_hint": "windows", "arch_hint": "x64", "content_type": "application/octet-stream", "content_length": 27100000}
+        },
+        {
+          "id": "py_win_x86_exe",
+          "candidate_type": "file",
+          "display_name": "Windows installer (32-bit)",
+          "filename": "python-3.12.10.exe",
+          "extension": "exe",
+          "section_heading": "Windows",
+          "technical_metadata": {"resource_family_hint": "software", "platform_hint": "windows", "arch_hint": "x86", "content_length": 26300000}
+        },
+        {
+          "id": "py_macos_pkg",
+          "candidate_type": "file",
+          "display_name": "macOS 64-bit universal2 installer",
+          "filename": "python-3.12.10-macos11.pkg",
+          "extension": "pkg",
+          "section_heading": "macOS",
+          "technical_metadata": {"resource_family_hint": "software", "platform_hint": "macos", "arch_hint": "arm64", "content_length": 44800000}
+        },
+        {
+          "id": "py_source",
+          "candidate_type": "file",
+          "display_name": "XZ compressed source tarball",
+          "filename": "Python-3.12.10.tar.xz",
+          "extension": "xz",
+          "section_heading": "Source release",
+          "technical_metadata": {"resource_family_hint": "archive", "attachment_kind": "source", "content_length": 20500000}
+        },
+        {
+          "id": "py_verification_group",
+          "candidate_ids": ["py_verification_sha", "py_verification_sig"],
+          "candidate_type": "file",
+          "display_name": "SHA256 and signature files",
+          "section_heading": "Verification",
+          "technical_metadata": {"attachment_kind": "verification", "evidence_group_hint": "signature_or_verification_files"}
+        }
+      ]
+    }
+  },
+  {
+    "name": "jdk_multiversion",
+    "expected_selected_any": ["jdk_win_x64_exe", "jdk_win_x64_zip"],
+    "forbidden_selected": ["jdk_source", "jdk_sha256"],
+    "evidence_pack": {
+      "schema_version": "0.1",
+      "batch_id": "bench_jdk_multiversion",
+      "page": {"title": "JDK 21 downloads", "relevant_sections": ["Windows", "Linux", "macOS", "Source"]},
+      "selection": {
+        "type": "automatic",
+        "candidate_ids": ["jdk_win_x64_exe", "jdk_win_x64_zip", "jdk_linux_x64_tar", "jdk_macos_arm64_dmg", "jdk_source", "jdk_sha256"]
+      },
+      "device": {"os": "windows", "arch": "x64", "locale": "zh-CN"},
+      "candidates": [
+        {
+          "id": "jdk_win_x64_exe",
+          "candidate_type": "file",
+          "display_name": "Windows x64 Installer",
+          "filename": "jdk-21_windows-x64_bin.exe",
+          "extension": "exe",
+          "section_heading": "Windows",
+          "technical_metadata": {"resource_family_hint": "software", "platform_hint": "windows", "arch_hint": "x64", "content_length": 169000000}
+        },
+        {
+          "id": "jdk_win_x64_zip",
+          "candidate_type": "file",
+          "display_name": "Windows x64 Compressed Archive",
+          "filename": "jdk-21_windows-x64_bin.zip",
+          "extension": "zip",
+          "section_heading": "Windows",
+          "technical_metadata": {"resource_family_hint": "archive", "platform_hint": "windows", "arch_hint": "x64", "content_length": 172000000}
+        },
+        {
+          "id": "jdk_linux_x64_tar",
+          "candidate_type": "file",
+          "display_name": "Linux x64 Compressed Archive",
+          "filename": "jdk-21_linux-x64_bin.tar.gz",
+          "extension": "gz",
+          "section_heading": "Linux",
+          "technical_metadata": {"resource_family_hint": "archive", "platform_hint": "linux", "arch_hint": "x64", "content_length": 188000000}
+        },
+        {
+          "id": "jdk_macos_arm64_dmg",
+          "candidate_type": "file",
+          "display_name": "macOS ARM64 Installer",
+          "filename": "jdk-21_macos-aarch64_bin.dmg",
+          "extension": "dmg",
+          "section_heading": "macOS",
+          "technical_metadata": {"resource_family_hint": "software", "platform_hint": "macos", "arch_hint": "arm64", "content_length": 166000000}
+        },
+        {
+          "id": "jdk_source",
+          "candidate_type": "file",
+          "display_name": "JDK source archive",
+          "filename": "jdk-21_src.zip",
+          "extension": "zip",
+          "section_heading": "Source",
+          "technical_metadata": {"resource_family_hint": "archive", "attachment_kind": "source"}
+        },
+        {
+          "id": "jdk_sha256",
+          "candidate_type": "file",
+          "display_name": "SHA256 checksum",
+          "filename": "jdk-21_windows-x64_bin.exe.sha256",
+          "extension": "sha256",
+          "section_heading": "Windows",
+          "technical_metadata": {"attachment_kind": "verification"}
+        }
+      ]
+    }
+  },
+  {
+    "name": "public_media",
+    "expected_selected_any": ["media_dash_1080", "media_hls_1080"],
+    "forbidden_selected": ["media_thumbnail"],
+    "evidence_pack": {
+      "schema_version": "0.1",
+      "batch_id": "bench_public_media",
+      "page": {"title": "Open course media", "relevant_sections": ["1080p", "720p", "Subtitles"]},
+      "selection": {"type": "automatic", "candidate_ids": ["media_dash_1080", "media_hls_1080", "media_mp4_720", "media_audio", "media_subtitle", "media_thumbnail"]},
+      "device": {"os": "windows", "arch": "x64", "locale": "zh-CN"},
+      "candidates": [
+        {
+          "id": "media_dash_1080",
+          "candidate_type": "media",
+          "display_name": "1080p DASH stream",
+          "filename": "lesson-1080.mpd",
+          "extension": "mpd",
+          "section_heading": "1080p",
+          "technical_metadata": {"resource_family_hint": "video", "media_kind": "dash", "network_observed": true, "content_type": "application/dash+xml"}
+        },
+        {
+          "id": "media_hls_1080",
+          "candidate_type": "media",
+          "display_name": "1080p HLS stream",
+          "filename": "lesson-1080.m3u8",
+          "extension": "m3u8",
+          "section_heading": "1080p",
+          "technical_metadata": {"resource_family_hint": "video", "media_kind": "hls", "network_observed": true, "content_type": "application/vnd.apple.mpegurl"}
+        },
+        {
+          "id": "media_mp4_720",
+          "candidate_type": "media",
+          "display_name": "720p MP4",
+          "filename": "lesson-720.mp4",
+          "extension": "mp4",
+          "section_heading": "720p",
+          "technical_metadata": {"resource_family_hint": "video", "media_kind": "video", "network_observed": true, "content_type": "video/mp4", "content_length": 314000000}
+        },
+        {
+          "id": "media_audio",
+          "candidate_type": "media",
+          "display_name": "Audio only",
+          "filename": "lesson-audio.m4a",
+          "extension": "m4a",
+          "technical_metadata": {"resource_family_hint": "audio", "media_kind": "audio", "network_observed": true}
+        },
+        {
+          "id": "media_subtitle",
+          "candidate_type": "file",
+          "display_name": "Simplified Chinese subtitles",
+          "filename": "lesson-zh-CN.vtt",
+          "extension": "vtt",
+          "section_heading": "Subtitles",
+          "technical_metadata": {"resource_family_hint": "subtitle", "attachment_kind": "subtitle"}
+        },
+        {
+          "id": "media_thumbnail",
+          "candidate_type": "image",
+          "display_name": "Lesson thumbnail",
+          "filename": "lesson-cover.webp",
+          "extension": "webp",
+          "technical_metadata": {"resource_family_hint": "image", "natural_width": 640, "natural_height": 360}
+        }
+      ]
+    }
+  },
+  {
+    "name": "image_resource_page",
+    "expected_selected_any": ["image_original"],
+    "forbidden_selected": ["image_thumb"],
+    "evidence_pack": {
+      "schema_version": "0.1",
+      "batch_id": "bench_image_resource_page",
+      "page": {"title": "Photo asset page", "relevant_sections": ["Original", "Preview"]},
+      "selection": {"type": "automatic", "candidate_ids": ["image_original", "image_preview", "image_thumb", "image_background"]},
+      "device": {"os": "windows", "arch": "x64", "locale": "zh-CN"},
+      "candidates": [
+        {
+          "id": "image_original",
+          "candidate_type": "image",
+          "display_name": "Original image",
+          "filename": "mountain-original.webp",
+          "extension": "webp",
+          "section_heading": "Original",
+          "technical_metadata": {"resource_family_hint": "image", "possible_original": true, "natural_width": 4096, "natural_height": 2731, "content_length": 7800000}
+        },
+        {
+          "id": "image_preview",
+          "candidate_type": "image",
+          "display_name": "Large preview",
+          "filename": "mountain-preview.webp",
+          "extension": "webp",
+          "section_heading": "Preview",
+          "technical_metadata": {"resource_family_hint": "image", "natural_width": 1600, "natural_height": 1067, "content_length": 1300000}
+        },
+        {
+          "id": "image_thumb",
+          "candidate_type": "image",
+          "display_name": "Thumbnail",
+          "filename": "mountain-thumb.webp",
+          "extension": "webp",
+          "section_heading": "Preview",
+          "technical_metadata": {"resource_family_hint": "image", "natural_width": 320, "natural_height": 213, "content_length": 68000}
+        },
+        {
+          "id": "image_background",
+          "candidate_type": "image",
+          "display_name": "Page background crop",
+          "filename": "mountain-bg.jpg",
+          "extension": "jpg",
+          "technical_metadata": {"resource_family_hint": "image", "image_source": "css_background", "natural_width": 1280, "natural_height": 720}
+        }
+      ]
+    }
+  }
+]

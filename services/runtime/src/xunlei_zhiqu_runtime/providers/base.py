@@ -28,6 +28,14 @@ class ModelCallMetrics:
     output_tokens: int | None = None
     cached_tokens: int | None = None
     latency_ms: int = 0
+    time_to_first_byte_ms: int | None = None
+    time_to_first_content_ms: int | None = None
+    generation_ms: int | None = None
+    stream_total_ms: int | None = None
+    output_tokens_per_second: float | None = None
+    chunk_count: int | None = None
+    connection_reused: bool | None = None
+    http_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
