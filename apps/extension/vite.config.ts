@@ -28,11 +28,12 @@ function assertSelfContainedContentScript(): Plugin {
 function injectRuntimeEndpoint(runtimeUrl: string): Plugin {
   const declaration = "const RUNTIME_URL = 'http://127.0.0.1:8765';";
   const replacement = `const RUNTIME_URL = ${JSON.stringify(runtimeUrl)};`;
+  const configurableEntries = ['/StageCApp.tsx', '/StageDApp.tsx', '/BatchImagePanel.tsx'];
   return {
     name: 'inject-runtime-endpoint',
     enforce: 'pre',
     transform(code, id) {
-      if (!id.endsWith('/StageDApp.tsx') && !id.endsWith('/BatchImagePanel.tsx')) return null;
+      if (!configurableEntries.some((entry) => id.endsWith(entry))) return null;
       if (!code.includes(declaration)) {
         this.error(`Runtime endpoint declaration was not found in ${id}`);
         return null;
@@ -44,7 +45,11 @@ function injectRuntimeEndpoint(runtimeUrl: string): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
-  const runtimeUrl = (env.VITE_RUNTIME_URL || 'http://127.0.0.1:8765').trim().replace(/\/+$/, '');
+  const runtimeUrl = (
+    process.env.VITE_RUNTIME_URL
+    || env.VITE_RUNTIME_URL
+    || 'http://127.0.0.1:8765'
+  ).trim().replace(/\/+$/, '');
 
   return {
     plugins: [
