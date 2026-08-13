@@ -15,11 +15,10 @@ class Settings(BaseSettings):
     model_connect_timeout_seconds: float = 10.0
     model_read_timeout_seconds: float = 120.0
     model_write_timeout_seconds: float = 30.0
-    # Stage D6 A/B profiles: quality is the correctness baseline; fast is the
-    # original latency baseline; wire/wire2 are the proven cost lineage.
-    # latency keeps the proven wire2 protocol but swaps only the model so model
-    # decode/service latency can be measured independently. wire3/compact are
-    # retained only so failed experiments remain reproducible.
+    # Stage D6 A/B profiles. wire2 is the proven cost/speed baseline. pipeline
+    # continues from wire2 by optimizing only Runtime-owned transport: compact
+    # request keys, deterministic output fields, fixed protocol placement and
+    # connection reuse. latency is retained only for model-only comparison.
     model_max_completion_tokens: int = 4096
     node_a_profile: Literal[
         "quality",
@@ -27,6 +26,7 @@ class Settings(BaseSettings):
         "compact",
         "wire",
         "wire2",
+        "pipeline",
         "wire3",
         "latency",
     ] = "quality"
