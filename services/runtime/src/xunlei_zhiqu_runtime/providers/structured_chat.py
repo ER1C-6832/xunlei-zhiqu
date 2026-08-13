@@ -145,8 +145,9 @@ class StructuredChatProvider(ModelProviderAdapter):
                 "POST",
                 "chat/completions",
                 json=payload,
-                extensions={"trace": trace},
+                extensions={"trace": trace.__call__},
             )
+            request_bytes = len(request.content)
             response = await self._client.send(request, stream=False)
         except httpx.ReadTimeout as exc:
             raise ModelProviderTimeoutError(
@@ -165,7 +166,8 @@ class StructuredChatProvider(ModelProviderAdapter):
             "node_a_http_trace api_provider=%s model=%s http_version=%s connection_reused=%s "
             "dispatch_ms=%d tcp_connect_ms=%d tls_handshake_ms=%d request_headers_ms=%d "
             "request_body_ms=%d upstream_wait_ms=%d response_body_ms=%d response_close_ms=%d "
-            "transport_unattributed_ms=%d client_transport_ms=%d provider_reported_ms=%s response_bytes=%d",
+            "transport_unattributed_ms=%d client_transport_ms=%d provider_reported_ms=%s "
+            "request_bytes=%d response_bytes=%d",
             self._api_adapter.name,
             self._model,
             trace_result.http_version,
@@ -181,8 +183,11 @@ class StructuredChatProvider(ModelProviderAdapter):
             trace_result.transport_unattributed_ms,
             trace_result.client_transport_ms,
             trace_result.provider_reported_ms if trace_result.provider_reported_ms is not None else "n/a",
+            request_bytes,
             trace_result.response_bytes,
         )
+        if trace_result.server_timing:
+            logger.info("node_a_server_timing raw=%s", trace_result.server_timing[:1000])
 
         try:
             response.raise_for_status()
