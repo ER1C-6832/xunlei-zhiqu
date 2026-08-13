@@ -84,9 +84,9 @@ async def health(request: Request) -> HealthResponse:
 
 
 @app.post("/v1/capture/analyze", response_model=ResourcePlan)
-async def analyze_capture(batch: CaptureBatch, request: Request) -> ResourcePlan:
+async def analyze_capture(batch: CaptureBatch, request: Request, refresh: bool = False) -> ResourcePlan:
     try:
-        return await request.app.state.analyzer.analyze(batch)
+        return await request.app.state.analyzer.analyze(batch, force_refresh=refresh)
     except ModelProviderTimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except ModelProviderRequestError as exc:
