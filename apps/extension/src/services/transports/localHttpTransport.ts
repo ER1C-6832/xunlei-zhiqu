@@ -1,4 +1,5 @@
 import type {
+  AnalysisStreamEvent,
   CaptureBatch,
   LinkFavoriteCreateRequest,
   LinkHistoryItem,
@@ -46,6 +47,14 @@ export class LocalHttpTransport implements ZhiquServiceTransport {
     // AnalysisCredential is a logical authorization handle. The local Demo transport
     // intentionally does not serialize it into CaptureBatch; future client/cloud
     // transports resolve the handle at their own authentication boundary.
+    if (options.onEvent) {
+      return this.postAnalysisStream(
+        `/v1/capture/analyze-stream${suffix}`,
+        batch,
+        options.onEvent,
+        forceRefresh ? '重新智能分析失败' : '智能分析失败'
+      );
+    }
     return this.postJson<ResourcePlan>(
       `/v1/capture/analyze${suffix}`,
       batch,
@@ -69,7 +78,67 @@ export class LocalHttpTransport implements ZhiquServiceTransport {
     await chrome.tabs.create({ url: `${this.endpoint}/app/#/${target}` });
   }
 
+  private async postAnalysisStream(
+    path: string,
+    body: CaptureBatch,
+    onEvent: (event: AnalysisStreamEvent) => void,
+    fallback: string
+  ): Promise<ResourcePlan> {
+    const response = await this.post(path, body, fallback);
+    if (!response.body) {
+      throw new ZhiquTransportError(`${fallback}：Runtime 未返回可读取的分析流。`, response.status);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: ResourcePlan | null = null;
+
+    const consumeLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let event: AnalysisStreamEvent;
+      try {
+        event = JSON.parse(trimmed) as AnalysisStreamEvent;
+      } catch {
+        throw new ZhiquTransportError(`${fallback}：Runtime 返回了无法解析的分析事件。`, response.status);
+      }
+      if (event.type === 'error') {
+        throw new ZhiquTransportError(`${fallback}：${event.message}`, response.status);
+      }
+      onEvent(event);
+      if (event.type === 'result') result = event.plan;
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          consumeLine(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf('\n');
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) consumeLine(buffer);
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (!result) {
+      throw new ZhiquTransportError(`${fallback}：分析流结束但没有返回完整结果。`, response.status);
+    }
+    return result;
+  }
+
   private async postJson<T>(path: string, body: unknown, fallback: string): Promise<T> {
+    const response = await this.post(path, body, fallback);
+    return response.json() as Promise<T>;
+  }
+
+  private async post(path: string, body: unknown, fallback: string): Promise<Response> {
     const headers = new Headers({ 'Content-Type': 'application/json' });
     if (this.sessionToken) headers.set('X-Zhiqu-Session', this.sessionToken);
 
@@ -91,8 +160,7 @@ export class LocalHttpTransport implements ZhiquServiceTransport {
         response.status
       );
     }
-
-    return response.json() as Promise<T>;
+    return response;
   }
 }
 

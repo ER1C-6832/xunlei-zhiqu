@@ -1,15 +1,30 @@
+from collections.abc import Awaitable, Callable
 import json
 import logging
 import re
 import time
+from typing import Literal
 
 from xunlei_zhiqu_runtime.models import CaptureBatch, EvidenceCandidate, EvidencePack, ResourcePlan
-from xunlei_zhiqu_runtime.providers.base import ModelCallMetrics, ModelProviderAdapter
+from xunlei_zhiqu_runtime.providers.base import (
+    ModelCallMetrics,
+    ModelProgressPhase,
+    ModelProviderAdapter,
+)
 from xunlei_zhiqu_runtime.services.evidence import compile_evidence_pack
 from xunlei_zhiqu_runtime.services.plan_cache import ResourcePlanCache
 
 
 logger = logging.getLogger("uvicorn.error")
+AnalysisPhase = Literal[
+    "evidence_ready",
+    "cache_hit",
+    "model_request_started",
+    "model_first_token",
+    "model_completed",
+    "plan_validated",
+]
+AnalysisPhaseSink = Callable[[AnalysisPhase], Awaitable[None]]
 
 
 class CaptureAnalyzer:
@@ -22,7 +37,13 @@ class CaptureAnalyzer:
         self._provider = provider
         self._cache = cache
 
-    async def analyze(self, batch: CaptureBatch, *, force_refresh: bool = False) -> ResourcePlan:
+    async def analyze(
+        self,
+        batch: CaptureBatch,
+        *,
+        force_refresh: bool = False,
+        phase_sink: AnalysisPhaseSink | None = None,
+    ) -> ResourcePlan:
         started = time.perf_counter()
 
         compile_started = time.perf_counter()
@@ -40,6 +61,7 @@ class CaptureAnalyzer:
             )
         )
         compile_ms = _elapsed_ms(compile_started)
+        await _emit_phase(phase_sink, "evidence_ready")
 
         cache_key = None
         cache_ms = 0
@@ -52,10 +74,12 @@ class CaptureAnalyzer:
             cached_plan = None if force_refresh else self._cache.get(cache_key, batch_id=evidence_pack.batch_id)
             cache_ms += _elapsed_ms(cache_started)
             if cached_plan is not None:
+                await _emit_phase(phase_sink, "cache_hit")
                 guard_started = time.perf_counter()
                 _validate_plan_references(cached_plan, evidence_pack)
                 _validate_recommendation_quality(cached_plan, evidence_pack)
                 guard_ms = _elapsed_ms(guard_started)
+                await _emit_phase(phase_sink, "plan_validated")
                 total_ms = _elapsed_ms(started)
                 self._log_analysis(
                     compiled=compiled.stats,
@@ -81,13 +105,20 @@ class CaptureAnalyzer:
                 )
                 return cached_plan
 
-        result = await self._provider.analyze_with_metrics(evidence_pack)
+        async def forward_model_progress(phase: ModelProgressPhase) -> None:
+            await _emit_phase(phase_sink, phase)
+
+        result = await self._provider.analyze_with_metrics(
+            evidence_pack,
+            progress=forward_model_progress if phase_sink is not None else None,
+        )
         plan = result.plan
 
         guard_started = time.perf_counter()
         _validate_plan_references(plan, evidence_pack)
         _validate_recommendation_quality(plan, evidence_pack)
         guard_ms = _elapsed_ms(guard_started)
+        await _emit_phase(phase_sink, "plan_validated")
 
         if self._cache is not None and cache_key is not None:
             cache_started = time.perf_counter()
@@ -373,6 +404,14 @@ def _identity_text(candidate: EvidenceCandidate) -> str:
         )
         if isinstance(value, str) and value
     )
+
+
+async def _emit_phase(
+    sink: AnalysisPhaseSink | None,
+    phase: AnalysisPhase,
+) -> None:
+    if sink is not None:
+        await sink(phase)
 
 
 def _metric(value: object | None) -> str:

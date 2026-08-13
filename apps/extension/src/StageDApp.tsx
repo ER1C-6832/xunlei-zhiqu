@@ -25,6 +25,11 @@ import {
   TriangleAlert
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  buildLocalResourcePreview,
+  type LocalResourcePreview,
+  useAnalysisProgress
+} from './analysisProgress';
 import { useZhiquCapabilities } from './hooks/useZhiquCapabilities';
 import {
   buildAlternativeGroups,
@@ -81,10 +86,15 @@ export function StageDExtensionApp() {
   const [discovery, setDiscovery] = useState<DiscoveryState>(EMPTY_DISCOVERY);
   const [discoveryUpdating, setDiscoveryUpdating] = useState(false);
   const capabilities = useZhiquCapabilities();
+  const analysisProgress = useAnalysisProgress(status === 'analyzing');
 
   const alternativeGroups = useMemo(
     () => plan ? buildAlternativeGroups(plan) : [],
     [plan]
+  );
+  const localPreview = useMemo(
+    () => batch ? buildLocalResourcePreview(batch) : null,
+    [batch]
   );
 
   const busy = ['selecting', 'scanning', 'analyzing', 'creating', 'favoriting'].includes(status);
@@ -219,6 +229,7 @@ export function StageDExtensionApp() {
       setError('当前运行形态只提供本地资源发现，智能分析暂不可用。');
       return;
     }
+    analysisProgress.begin();
     setStatus('analyzing');
     setError(null);
     setCreatedJob(null);
@@ -226,7 +237,11 @@ export function StageDExtensionApp() {
     if (forceRefresh) setAnnotationCount(0);
 
     try {
-      const nextPlan = await zhiquService.analyzeResources(batch, { forceRefresh });
+      const nextPlan = await zhiquService.analyzeResources(batch, {
+        forceRefresh,
+        onEvent: analysisProgress.onEvent
+      });
+      analysisProgress.complete();
       setPlan(nextPlan);
       setConfirmedIds(new Set(nextPlan.selected.map((item) => item.item_id)));
       setStatus('idle');
@@ -240,6 +255,7 @@ export function StageDExtensionApp() {
         setAnnotationCount(0);
       }
     } catch (analysisError) {
+      analysisProgress.fail();
       setStatus('error');
       setError(analysisError instanceof Error ? humanizeError(analysisError.message) : '智能分析失败，请重试。');
     }
@@ -302,7 +318,7 @@ export function StageDExtensionApp() {
   }
 
   function toggleItem(itemId: string) {
-    if (createdJob) return;
+    if (createdJob || status === 'analyzing') return;
     setConfirmedIds((current) => {
       const next = new Set(current);
       if (next.has(itemId)) next.delete(itemId);
@@ -432,11 +448,12 @@ export function StageDExtensionApp() {
             </div>
           )}
 
-          {status === 'analyzing' ? (
-            <div className="zhiqu-working" role="status">
-              <LoaderCircle className="spin" size={20} />
-              <span>正在整理版本、平台和格式…</span>
-            </div>
+          {status === 'analyzing' && localPreview ? (
+            <AnalysisProgressPanel
+              preview={localPreview}
+              progress={analysisProgress.progress}
+              label={analysisProgress.label}
+            />
           ) : (
             <div className="zhiqu-capture-actions">
               <button className="zhiqu-primary" type="button" onClick={() => void analyzeCurrentBatch(false)} disabled={busy || !canAnalyze}>
@@ -476,7 +493,16 @@ export function StageDExtensionApp() {
       )}
 
       {plan && (
-        <section className="zhiqu-result" aria-live="polite">
+        <section className="zhiqu-result" aria-live="polite" key={plan.plan_id}>
+          {status === 'analyzing' && localPreview && (
+            <AnalysisProgressPanel
+              preview={localPreview}
+              progress={analysisProgress.progress}
+              label={analysisProgress.label}
+              compact
+            />
+          )}
+
           <div className="zhiqu-resource-heading">
             <div>
               <h1>{plan.resource_title}</h1>
@@ -498,7 +524,7 @@ export function StageDExtensionApp() {
                   ? '网页中的推荐下载项已经标出，也可以直接定位过去。'
                   : '可以把原网页直接滚动到最推荐的下载项。'}
               </span>
-              <button type="button" onClick={() => void focusRecommendedResource()}>
+              <button type="button" onClick={() => void focusRecommendedResource()} disabled={status === 'analyzing'}>
                 <MousePointer2 size={14} />定位推荐下载
               </button>
             </div>
@@ -529,7 +555,7 @@ export function StageDExtensionApp() {
                 type="button"
                 className={deliveryTarget === 'local' ? 'active' : ''}
                 onClick={() => !createdJob && setDeliveryTarget('local')}
-                disabled={Boolean(createdJob) || capabilities?.localDownload !== true}
+                disabled={busy || Boolean(createdJob) || capabilities?.localDownload !== true}
                 title={capabilities?.localDownload === false ? '当前没有本地下载能力' : undefined}
               >
                 <HardDrive size={16} /><span>本地</span>
@@ -538,7 +564,7 @@ export function StageDExtensionApp() {
                 type="button"
                 className={deliveryTarget === 'cloud' ? 'active' : ''}
                 onClick={() => !createdJob && setDeliveryTarget('cloud')}
-                disabled={Boolean(createdJob) || capabilities?.cloudDelivery !== true}
+                disabled={busy || Boolean(createdJob) || capabilities?.cloudDelivery !== true}
                 title={capabilities?.cloudDelivery === false ? '当前没有云盘交付能力' : undefined}
               >
                 <Cloud size={16} /><span>云盘</span>
@@ -551,7 +577,7 @@ export function StageDExtensionApp() {
               className="zhiqu-favorite"
               type="button"
               onClick={favoriteResource}
-              disabled={status === 'favoriting' || Boolean(favoriteItem) || !canUseTaskRuntime}
+              disabled={status === 'favoriting' || status === 'analyzing' || Boolean(favoriteItem) || !canUseTaskRuntime}
               title={!canUseTaskRuntime ? '连接迅雷客户端后可使用收藏' : undefined}
             >
               {status === 'favoriting' ? <LoaderCircle className="spin" size={17} /> : <Star size={17} fill={favoriteItem ? 'currentColor' : 'none'} />}
@@ -561,7 +587,7 @@ export function StageDExtensionApp() {
               className="zhiqu-download"
               type="button"
               onClick={createResourceJob}
-              disabled={status === 'creating' || Boolean(createdJob) || confirmedIds.size === 0 || !selectedDeliveryAvailable}
+              disabled={status === 'creating' || status === 'analyzing' || Boolean(createdJob) || confirmedIds.size === 0 || !selectedDeliveryAvailable}
             >
               {status === 'creating' ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
               {status === 'creating'
@@ -611,7 +637,7 @@ export function StageDExtensionApp() {
               disabled={busy || !canAnalyze}
               title={canAnalyze ? '忽略当前缓存，再调用一次智能分析' : '当前没有智能分析能力'}
             >
-              {status === 'analyzing' ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}
+              <Sparkles size={17} />
               {status === 'analyzing' ? '重新分析中…' : '重新智能分析'}
             </button>
             <button className="zhiqu-reselect" type="button" onClick={() => captureResources('automatic')} disabled={busy}>
@@ -643,6 +669,44 @@ export function StageDExtensionApp() {
         </section>
       )}
     </main>
+  );
+}
+
+function AnalysisProgressPanel({ preview, progress, label, compact = false }: {
+  preview: LocalResourcePreview;
+  progress: number;
+  label: string;
+  compact?: boolean;
+}) {
+  const safeProgress = Math.max(4, Math.min(100, progress));
+  return (
+    <section className={`zhiqu-analysis-progress ${compact ? 'compact' : ''}`} role="status" aria-live="polite">
+      <div className="zhiqu-analysis-preview-head">
+        <div>
+          <strong>{preview.title}</strong>
+          <span>已找到 {preview.total} 项资源</span>
+        </div>
+        <Sparkles size={18} aria-hidden="true" />
+      </div>
+      {preview.groups.length > 0 && (
+        <div className="zhiqu-analysis-preview-groups" aria-label="本地资源概览">
+          {preview.groups.map((group) => (
+            <span key={group.label}>{group.label} {group.count}</span>
+          ))}
+        </div>
+      )}
+      <div
+        className="zhiqu-analysis-progress-track"
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(progress)}
+      >
+        <span className="zhiqu-analysis-progress-fill" style={{ width: `${safeProgress}%` }} />
+      </div>
+      <p>{label}</p>
+    </section>
   );
 }
 

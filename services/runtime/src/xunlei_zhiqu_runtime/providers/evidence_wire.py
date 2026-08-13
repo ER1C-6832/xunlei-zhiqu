@@ -6,7 +6,11 @@ import logging
 import re
 
 from xunlei_zhiqu_runtime.models import EvidenceCandidate, EvidencePack, ResourcePlan
-from xunlei_zhiqu_runtime.providers.base import ModelAnalysisResult, ModelProviderAdapter
+from xunlei_zhiqu_runtime.providers.base import (
+    ModelAnalysisResult,
+    ModelProgressSink,
+    ModelProviderAdapter,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -52,7 +56,12 @@ class EvidenceWireProvider(ModelProviderAdapter):
     async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
         return (await self.analyze_with_metrics(evidence_pack)).plan
 
-    async def analyze_with_metrics(self, evidence_pack: EvidencePack) -> ModelAnalysisResult:
+    async def analyze_with_metrics(
+        self,
+        evidence_pack: EvidencePack,
+        *,
+        progress: ModelProgressSink | None = None,
+    ) -> ModelAnalysisResult:
         compact_pack, stats = compact_evidence_pack(evidence_pack)
         logger.info(
             "node_a_evidence_wire before_chars=%d after_chars=%d saved_chars=%d saved_pct=%.1f",
@@ -61,7 +70,7 @@ class EvidenceWireProvider(ModelProviderAdapter):
             stats.saved_chars,
             stats.saved_percent,
         )
-        return await self._inner.analyze_with_metrics(compact_pack)
+        return await self._inner.analyze_with_metrics(compact_pack, progress=progress)
 
     async def aclose(self) -> None:
         await self._inner.aclose()

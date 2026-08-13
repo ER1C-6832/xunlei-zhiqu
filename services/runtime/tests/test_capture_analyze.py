@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from xunlei_zhiqu_runtime.config import get_settings
 from xunlei_zhiqu_runtime.main import app
 
 
@@ -50,8 +51,14 @@ SAMPLE = {
 
 def test_analyze_endpoint_returns_resource_plan(monkeypatch) -> None:
     monkeypatch.setenv("MODEL_PROVIDER", "fixture")
-    with TestClient(app) as client:
-        response = client.post("/v1/capture/analyze", json=SAMPLE)
+    monkeypatch.setenv("ENABLE_FIXTURE_PROVIDER", "true")
+    monkeypatch.setenv("RUNTIME_AUTH_MODE", "off")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as client:
+            response = client.post("/v1/capture/analyze", json=SAMPLE)
+    finally:
+        get_settings.cache_clear()
 
     assert response.status_code == 200
     body = response.json()

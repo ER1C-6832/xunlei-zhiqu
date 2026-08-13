@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import time
+from typing import Literal
 
 from xunlei_zhiqu_runtime.models import EvidencePack, ResourcePlan
 
@@ -19,6 +21,14 @@ class ModelProviderRequestError(ModelProviderError):
 
 class ModelProviderResponseError(ModelProviderError):
     """The provider answered, but the response could not be used as a valid ResourcePlan."""
+
+
+ModelProgressPhase = Literal[
+    "model_request_started",
+    "model_first_token",
+    "model_completed",
+]
+ModelProgressSink = Callable[[ModelProgressPhase], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +71,16 @@ class ModelProviderAdapter(ABC):
     async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
         raise NotImplementedError
 
-    async def analyze_with_metrics(self, evidence_pack: EvidencePack) -> ModelAnalysisResult:
+    async def analyze_with_metrics(
+        self,
+        evidence_pack: EvidencePack,
+        *,
+        progress: ModelProgressSink | None = None,
+    ) -> ModelAnalysisResult:
         started = time.perf_counter()
+        await emit_model_progress(progress, "model_request_started")
         plan = await self.analyze(evidence_pack)
+        await emit_model_progress(progress, "model_completed")
         return ModelAnalysisResult(
             plan=plan,
             metrics=ModelCallMetrics(
@@ -74,3 +91,11 @@ class ModelProviderAdapter(ABC):
 
     async def aclose(self) -> None:
         return None
+
+
+async def emit_model_progress(
+    sink: ModelProgressSink | None,
+    phase: ModelProgressPhase,
+) -> None:
+    if sink is not None:
+        await sink(phase)

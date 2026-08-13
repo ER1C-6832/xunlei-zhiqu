@@ -1,10 +1,13 @@
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+import json
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from xunlei_zhiqu_runtime import __version__
@@ -47,6 +50,9 @@ from xunlei_zhiqu_runtime.services.job_store import (
     set_favorite,
 )
 from xunlei_zhiqu_runtime.services.plan_cache import ResourcePlanCache
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
@@ -128,6 +134,75 @@ async def analyze_capture(batch: CaptureBatch, request: Request, refresh: bool =
             status_code=502,
             detail=f"模型返回的 ResourcePlan 未通过确定性校验：{exc}",
         ) from exc
+
+
+@app.post("/v1/capture/analyze-stream", response_class=StreamingResponse)
+async def analyze_capture_stream(
+    batch: CaptureBatch,
+    request: Request,
+    refresh: bool = False,
+) -> StreamingResponse:
+    analyzer = request.app.state.analyzer
+
+    async def stream_events() -> AsyncIterator[str]:
+        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        cache_hit = False
+
+        async def phase_sink(phase: str) -> None:
+            nonlocal cache_hit
+            if phase == "cache_hit":
+                cache_hit = True
+            await queue.put({"type": "phase", "phase": phase})
+
+        async def run_analysis() -> None:
+            try:
+                plan = await analyzer.analyze(
+                    batch,
+                    force_refresh=refresh,
+                    phase_sink=phase_sink,
+                )
+                await queue.put({"type": "phase", "phase": "done"})
+                await queue.put(
+                    {
+                        "type": "result",
+                        "plan": plan.model_dump(mode="json"),
+                        "cache_hit": cache_hit,
+                    }
+                )
+            except (
+                ModelProviderTimeoutError,
+                ModelProviderRequestError,
+                ModelProviderResponseError,
+                ValueError,
+            ) as exc:
+                await queue.put({"type": "error", "message": _analysis_stream_error(exc)})
+            except Exception:
+                logger.exception("progressive analysis failed unexpectedly")
+                await queue.put({"type": "error", "message": "智能分析失败，请稍后重试。"})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run_analysis())
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+        finally:
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    return StreamingResponse(
+        stream_events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/v1/jobs", response_model=ResourceJobSnapshot)
@@ -219,6 +294,15 @@ async def update_link_favorite(history_id: str, payload: LinkFavoriteUpdateReque
     if item is None:
         raise HTTPException(status_code=404, detail="Link library item not found")
     return item
+
+
+def _analysis_stream_error(exc: Exception) -> str:
+    if isinstance(exc, ValueError) and not isinstance(
+        exc,
+        (ModelProviderTimeoutError, ModelProviderRequestError, ModelProviderResponseError),
+    ):
+        return f"模型返回的 ResourcePlan 未通过确定性校验：{exc}"
+    return str(exc)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]

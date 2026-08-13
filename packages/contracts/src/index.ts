@@ -14,6 +14,14 @@ export type AnalysisCredentialKind =
   | 'client_session'
   | 'web_session'
   | 'guest_trial';
+export type AnalysisPhase =
+  | 'evidence_ready'
+  | 'cache_hit'
+  | 'model_request_started'
+  | 'model_first_token'
+  | 'model_completed'
+  | 'plan_validated'
+  | 'done';
 export type TaskAction = 'pause' | 'resume' | 'cancel' | 'continue_acquisition' | 'open';
 export type ResourceType =
   | 'software'
@@ -171,6 +179,11 @@ export interface ResourcePlan {
   uncertainties: PlanItem[];
   recommendations: ScenarioRecommendation[];
 }
+
+export type AnalysisStreamEvent =
+  | { type: 'phase'; phase: AnalysisPhase }
+  | { type: 'result'; plan: ResourcePlan; cache_hit: boolean }
+  | { type: 'error'; message: string };
 
 export interface ResourceJobCreateRequest {
   schema_version: '0.1';

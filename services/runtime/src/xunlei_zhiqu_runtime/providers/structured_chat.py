@@ -15,10 +15,12 @@ from xunlei_zhiqu_runtime.providers.adapters.base import ProviderApiAdapter, Pro
 from xunlei_zhiqu_runtime.providers.base import (
     ModelAnalysisResult,
     ModelCallMetrics,
+    ModelProgressSink,
     ModelProviderAdapter,
     ModelProviderRequestError,
     ModelProviderResponseError,
     ModelProviderTimeoutError,
+    emit_model_progress,
 )
 from xunlei_zhiqu_runtime.providers.http_trace import HttpTimingBreakdown, HttpTraceRecorder
 
@@ -117,7 +119,12 @@ class StructuredChatProvider(ModelProviderAdapter):
     async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
         return (await self.analyze_with_metrics(evidence_pack)).plan
 
-    async def analyze_with_metrics(self, evidence_pack: EvidencePack) -> ModelAnalysisResult:
+    async def analyze_with_metrics(
+        self,
+        evidence_pack: EvidencePack,
+        *,
+        progress: ModelProgressSink | None = None,
+    ) -> ModelAnalysisResult:
         started = time.perf_counter()
         build_started = started
         request_document = self._build_request_document(evidence_pack)
@@ -137,29 +144,33 @@ class StructuredChatProvider(ModelProviderAdapter):
             ],
         }
         payload.update(self._api_adapter.request_overrides(model=self._model))
-        if self._stream_diagnostics:
+        streaming_enabled = self._stream_diagnostics or progress is not None
+        if streaming_enabled:
             payload["stream"] = True
             payload.update(self._api_adapter.stream_request_overrides(model=self._model))
         build_ms = _elapsed_ms(build_started)
 
         logger.info(
             "node_a_request api_provider=%s model=%s prompt_version=%s ai_evidence_count=%d "
-            "prompt_chars=%d max_completion_tokens=%d stream_diagnostics=%s http2_requested=%s",
+            "prompt_chars=%d max_completion_tokens=%d streaming_enabled=%s stream_diagnostics=%s http2_requested=%s",
             self._api_adapter.name,
             self._model,
             self._prompt_version,
             len(evidence_pack.candidates),
             len(user_content),
             self._max_completion_tokens,
+            str(streaming_enabled).lower(),
             str(self._stream_diagnostics).lower(),
             str(self._http2_enabled).lower(),
         )
 
+        await emit_model_progress(progress, "model_request_started")
         transport = (
-            await self._send_streaming(payload, evidence_pack)
-            if self._stream_diagnostics
+            await self._send_streaming(payload, evidence_pack, progress=progress)
+            if streaming_enabled
             else await self._send_buffered(payload, evidence_pack)
         )
+        await emit_model_progress(progress, "model_completed")
         self._log_http_trace(transport.trace)
 
         content = transport.content
@@ -253,7 +264,7 @@ class StructuredChatProvider(ModelProviderAdapter):
             transport.usage.output_tokens,
             transport.generation_ms,
         )
-        if self._stream_diagnostics:
+        if streaming_enabled:
             logger.info(
                 "node_a_stream_trace api_provider=%s model=%s time_to_first_byte_ms=%s "
                 "time_to_first_content_ms=%s generation_ms=%s stream_total_ms=%s "
@@ -357,6 +368,8 @@ class StructuredChatProvider(ModelProviderAdapter):
         self,
         payload: dict[str, object],
         evidence_pack: EvidencePack,
+        *,
+        progress: ModelProgressSink | None = None,
     ) -> _TransportResult:
         trace = HttpTraceRecorder()
         http_started = time.perf_counter()
@@ -408,6 +421,7 @@ class StructuredChatProvider(ModelProviderAdapter):
                     if stream_event.content_delta:
                         if first_content_at is None:
                             first_content_at = now
+                            await emit_model_progress(progress, "model_first_token")
                         last_generation_at = now
                         content_parts.append(stream_event.content_delta)
                     if stream_event.reasoning_delta:
@@ -426,6 +440,7 @@ class StructuredChatProvider(ModelProviderAdapter):
                         now = time.perf_counter()
                         if first_content_at is None:
                             first_content_at = now
+                            await emit_model_progress(progress, "model_first_token")
                         last_generation_at = now
                         content_parts.append(stream_event.content_delta)
                     if stream_event.reasoning_delta:

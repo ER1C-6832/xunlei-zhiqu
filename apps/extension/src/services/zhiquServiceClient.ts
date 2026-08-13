@@ -1,6 +1,7 @@
 import type {
   AnalysisAccess,
   AnalysisCredential,
+  AnalysisStreamEvent,
   CaptureBatch,
   LinkFavoriteCreateRequest,
   LinkHistoryItem,
@@ -21,6 +22,7 @@ export type TaskCenterTarget = 'downloads' | 'links';
 
 export type AnalyzeResourcesOptions = {
   forceRefresh?: boolean;
+  onEvent?: (event: AnalysisStreamEvent) => void;
 };
 
 export type TransportAnalyzeResourcesOptions = AnalyzeResourcesOptions & {

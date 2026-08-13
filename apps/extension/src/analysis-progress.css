@@ -1,0 +1,132 @@
+.zhiqu-analysis-progress {
+  display: grid;
+  gap: 11px;
+  margin-top: 12px;
+  padding: 13px;
+  overflow: hidden;
+  border: 1px solid #d9e8fb;
+  border-radius: 12px;
+  color: #2f517d;
+  background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+}
+
+.zhiqu-analysis-progress.compact {
+  margin: 0 0 15px;
+  padding: 11px 12px;
+}
+
+.zhiqu-analysis-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.zhiqu-analysis-preview-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.zhiqu-analysis-preview-head strong {
+  overflow: hidden;
+  color: #1f3450;
+  font-size: 14px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zhiqu-analysis-preview-head span {
+  color: #6a7d95;
+  font-size: 12px;
+}
+
+.zhiqu-analysis-preview-head > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #1677ff;
+  animation: zhiqu-analysis-pulse 1.8s ease-in-out infinite;
+}
+
+.zhiqu-analysis-preview-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.zhiqu-analysis-preview-groups span {
+  padding: 4px 7px;
+  border: 1px solid #dce9f8;
+  border-radius: 999px;
+  color: #55708f;
+  background: rgba(255, 255, 255, .82);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.zhiqu-analysis-progress-track {
+  position: relative;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce8f6;
+}
+
+.zhiqu-analysis-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 12px;
+  overflow: hidden;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1677ff 0%, #4d9dff 65%, #75b5ff 100%);
+  transition: width .28s cubic-bezier(.2, .75, .25, 1);
+}
+
+.zhiqu-analysis-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .7), transparent);
+  animation: zhiqu-analysis-shimmer 1.45s ease-in-out infinite;
+}
+
+.zhiqu-analysis-progress p {
+  margin: 0;
+  color: #3d6291;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.zhiqu-result {
+  animation: zhiqu-result-arrive .22s ease-out both;
+}
+
+@keyframes zhiqu-analysis-shimmer {
+  0% { transform: translateX(-100%); }
+  65%, 100% { transform: translateX(120%); }
+}
+
+@keyframes zhiqu-analysis-pulse {
+  0%, 100% { opacity: .65; transform: scale(.94); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+
+@keyframes zhiqu-result-arrive {
+  from { opacity: .72; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zhiqu-analysis-preview-head > svg,
+  .zhiqu-analysis-progress-fill::after,
+  .zhiqu-result {
+    animation: none !important;
+  }
+
+  .zhiqu-analysis-progress-fill {
+    transition: none !important;
+  }
+}
