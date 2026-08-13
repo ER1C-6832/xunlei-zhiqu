@@ -1,3 +1,5 @@
+import logging
+
 from xunlei_zhiqu_runtime.config import Settings
 from xunlei_zhiqu_runtime.providers import openai_compatible
 from xunlei_zhiqu_runtime.providers.base import ModelProviderAdapter
@@ -5,16 +7,61 @@ from xunlei_zhiqu_runtime.providers.fixture import FixtureProvider
 from xunlei_zhiqu_runtime.providers.openai_compatible import OpenAICompatibleProvider
 
 
-_BASE_SYSTEM_PROMPT = openai_compatible.SYSTEM_PROMPT
-_FAST_PROFILE_SUFFIX = """
+logger = logging.getLogger("uvicorn.error")
 
-快速实验档（准确性规则优先于精简规则）：
-- 保持上面的当前设备、主资源、附件和真实 candidate_id 约束不变；如果精简会损害这些约束，宁可多输出。
-- selected 尽量 1~2 个；alternatives 尽量不超过 4 个逻辑组；excluded 不超过 2 个；uncertainties 不超过 2 个；recommendations 不超过 3 个。
-- overview 尽量控制在 120 个中文字符以内；label 尽量不超过 28 个字符；plain_explanation 尽量不超过 80 个中文字符；reason 尽量不超过 50 个中文字符；recommendation.summary 尽量不超过 60 个中文字符。
-- 不在多个字段重复相同文件名、设备信息、版本号或 candidate id；technical_attributes 只保留真正影响用户选择的少量属性。
-- 相同用途的其他平台、其他架构、源码、校验附件优先按逻辑组概括，不要逐文件复述。
-"""
+_BASE_SYSTEM_PROMPT = openai_compatible.SYSTEM_PROMPT
+_BASE_OUTPUT_CONTRACT = openai_compatible.OUTPUT_CONTRACT
+_BASE_PROMPT_VERSION = openai_compatible.PROMPT_VERSION
+
+# Fast is a separate compact prompt, not a suffix appended to the quality prompt.
+# It deliberately keeps all evidence and all deterministic correctness constraints.
+_FAST_SYSTEM_PROMPT = """你是“迅雷智取”节点 A。把 EvidencePack 整理成简洁 ResourcePlan，只依据已有证据，不猜隐藏意图，不编造 URL、版本、平台、架构、大小、清晰度或 candidate id。
+
+先选主资源，再处理其他平台/格式/版本和附件。设备信息可用于默认兼容推荐，但用户最终可修改。
+
+必须遵守：
+- 只能引用 EvidencePack 中已有 candidate id；group evidence 的 candidate_ids 中每个 ID 都可引用。
+- 若存在匹配 device.os/device.arch 的主资源，selected 至少包含一个匹配项；不得只选其他系统、源码或验证附件。
+- 签名、checksum、GPG、SBOM、Sigstore 等只能作为附件；存在主资源时不能成为唯一 selected。
+- 软件存在当前设备可直接使用的安装包/压缩包时，源码放 alternatives。
+- resource_family_hint 只是提示；ambiguous=true 时结合文件名、上下文、MIME、技术元数据判断。
+- ResourcePlan 只是建议，不是用户最终决定。
+
+输出要短：
+- selected 通常 1 个，确有必要最多 2 个。
+- alternatives 最多 3 个逻辑组；同用途候选用一个 PlanItem.candidate_ids[] 聚合。
+- excluded 最多 1 组；uncertainties 最多 1 组；recommendations 最多 1 条。
+- overview 1~2 句；label 短；plain_explanation 只说“是什么/适合谁”；reason 只说最关键依据。
+- 不在多个字段重复文件名、设备、版本、candidate id；technical_attributes 只留影响选择的属性；evidence_refs 没必要就空数组。
+- 泛化不确定性写 overview，不要创建 candidate_ids=[] 的 PlanItem。
+
+所有 PlanItem 至少引用 1 个真实 candidate_id；technical_attributes 必须是 JSON object；candidate_ids/evidence_refs/recommendation.item_ids 必须是数组。只输出一个 JSON 对象，不要 Markdown。"""
+
+_FAST_OUTPUT_CONTRACT = {
+    "resource_type": "enum",
+    "resource_title": "string",
+    "overview": "string",
+    "selected": "PlanItem[]",
+    "alternatives": "PlanItem[]",
+    "excluded": "PlanItem[]",
+    "uncertainties": "PlanItem[]",
+    "recommendations": "Recommendation[]",
+    "PlanItem": {
+        "item_id": "string",
+        "candidate_ids": ["existing id"],
+        "label": "string",
+        "plain_explanation": "string",
+        "reason": "string",
+        "role": "primary|attachment|alternative|excluded|unknown",
+        "technical_attributes": {},
+        "evidence_refs": [],
+    },
+    "Recommendation": {
+        "scenario": "current_device|compatibility|quality|small_size|manual",
+        "item_ids": ["existing item_id"],
+        "summary": "string",
+    },
+}
 
 
 def create_provider(settings: Settings) -> ModelProviderAdapter:
@@ -27,18 +74,24 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
     if settings.model_provider == "openai_compatible":
         key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
         fast_profile = settings.node_a_profile == "fast"
-        # The quality profile remains byte-for-byte the existing Stage D6 prompt.
-        # Fast is opt-in and only tightens presentation/output budgets; it does not
-        # add more aggressive candidate grouping or remove evidence before Node A.
-        openai_compatible.SYSTEM_PROMPT = (
-            f"{_BASE_SYSTEM_PROMPT}{_FAST_PROFILE_SUFFIX}"
-            if fast_profile
-            else _BASE_SYSTEM_PROMPT
-        )
-        max_completion_tokens = (
-            min(settings.model_max_completion_tokens, 2304)
-            if fast_profile
-            else settings.model_max_completion_tokens
+
+        if fast_profile:
+            openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
+            openai_compatible.OUTPUT_CONTRACT = _FAST_OUTPUT_CONTRACT
+            openai_compatible.PROMPT_VERSION = "stage-d6-fast-v2"
+            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        else:
+            # Preserve the proven quality baseline byte-for-byte.
+            openai_compatible.SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT
+            openai_compatible.OUTPUT_CONTRACT = _BASE_OUTPUT_CONTRACT
+            openai_compatible.PROMPT_VERSION = _BASE_PROMPT_VERSION
+            max_completion_tokens = settings.model_max_completion_tokens
+
+        logger.info(
+            "node_a_profile profile=%s prompt_version=%s max_completion_tokens=%d",
+            settings.node_a_profile,
+            openai_compatible.PROMPT_VERSION,
+            max_completion_tokens,
         )
         return OpenAICompatibleProvider(
             base_url=settings.model_base_url,
