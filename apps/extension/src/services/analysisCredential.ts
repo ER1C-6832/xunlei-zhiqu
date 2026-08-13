@@ -1,18 +1,13 @@
 import type {
   AnalysisAccess,
   AnalysisCredential,
+  AnalysisCredentialKind,
   ZhiquCapabilities
 } from '@xunlei-zhiqu/contracts';
 
-export type AnalysisCredentialFixture =
-  | 'demo'
-  | 'anonymous'
-  | 'client_session'
-  | 'web_session'
-  | 'guest_trial'
-  | 'none';
+export type AnalysisCredentialFixture = AnalysisCredentialKind | 'none';
 
-const DEFAULT_ANALYSIS_CREDENTIAL: AnalysisCredentialFixture = 'demo';
+const DEFAULT_ANALYSIS_CREDENTIAL: AnalysisCredentialKind = 'demo';
 
 export function resolveFixtureAnalysisCredential(): AnalysisCredential | null {
   const configured = (import.meta.env.VITE_ZHIQU_ANALYSIS_CREDENTIAL || DEFAULT_ANALYSIS_CREDENTIAL)
@@ -20,7 +15,7 @@ export function resolveFixtureAnalysisCredential(): AnalysisCredential | null {
     .toLowerCase();
 
   if (configured === 'none') return null;
-  if (isAnalysisCredentialFixture(configured)) {
+  if (isAnalysisCredentialKind(configured)) {
     return {
       schema_version: '0.1',
       kind: configured
@@ -46,7 +41,7 @@ export function resolveAnalysisAccess(
   };
 }
 
-function isAnalysisCredentialFixture(value: string): value is Exclude<AnalysisCredentialFixture, 'none'> {
+function isAnalysisCredentialKind(value: string): value is AnalysisCredentialKind {
   return value === 'demo'
     || value === 'anonymous'
     || value === 'client_session'
