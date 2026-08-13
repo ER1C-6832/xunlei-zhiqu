@@ -30,8 +30,8 @@ import {
   recommendationForItem,
   type PresentedResourceGroup
 } from './resourcePresentation';
+import { zhiquService } from './services/zhiquServiceClient';
 
-const RUNTIME_URL = 'http://127.0.0.1:8765';
 // Keep this duplicated intentionally: side-panel entry must not import content-script modules,
 // otherwise Rollup can extract a shared ESM chunk that MV3 content_scripts cannot execute.
 const AUTO_DISCOVERY_STORAGE_KEY = 'zhiqu_auto_discovery_enabled';
@@ -200,17 +200,7 @@ export function StageDExtensionApp() {
     if (forceRefresh) setAnnotationCount(0);
 
     try {
-      const analyzeUrl = forceRefresh
-        ? `${RUNTIME_URL}/v1/capture/analyze?refresh=true`
-        : `${RUNTIME_URL}/v1/capture/analyze`;
-      const response = await fetch(analyzeUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(batch)
-      });
-      if (!response.ok) throw new Error(await runtimeError(response, forceRefresh ? '重新智能分析失败' : '智能分析失败'));
-
-      const nextPlan = (await response.json()) as ResourcePlan;
+      const nextPlan = await zhiquService.analyzeResources(batch, { forceRefresh });
       setPlan(nextPlan);
       setConfirmedIds(new Set(nextPlan.selected.map((item) => item.item_id)));
       setStatus('idle');
@@ -314,16 +304,10 @@ export function StageDExtensionApp() {
     setStatus('creating');
     setError(null);
     try {
-      const response = await fetch(`${RUNTIME_URL}/v1/jobs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) throw new Error(await runtimeError(response, '创建下载任务失败'));
-      const job = (await response.json()) as ResourceJobSnapshot;
+      const job = await zhiquService.createJob(payload);
       setCreatedJob(job);
       setStatus('idle');
-      void chrome.tabs.create({ url: `${RUNTIME_URL}/app/#/downloads` });
+      void zhiquService.openTaskCenter('downloads');
     } catch (createError) {
       setStatus('error');
       setError(createError instanceof Error ? humanizeError(createError.message) : '创建下载任务失败，请重试。');
@@ -336,13 +320,7 @@ export function StageDExtensionApp() {
     setStatus('favoriting');
     setError(null);
     try {
-      const response = await fetch(`${RUNTIME_URL}/v1/link-library/favorites`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) throw new Error(await runtimeError(response, '收藏失败'));
-      setFavoriteItem((await response.json()) as LinkHistoryItem);
+      setFavoriteItem(await zhiquService.favoriteResource(payload));
       setStatus('idle');
     } catch (favoriteError) {
       setStatus('error');
@@ -351,7 +329,7 @@ export function StageDExtensionApp() {
   }
 
   function openTaskCenter(target: 'downloads' | 'links') {
-    void chrome.tabs.create({ url: `${RUNTIME_URL}/app/#/${target}` });
+    void zhiquService.openTaskCenter(target);
   }
 
   return (
@@ -1007,16 +985,6 @@ function isMissingContentScriptError(error: unknown): boolean {
   return message.includes('Receiving end does not exist')
     || message.includes('Could not establish connection')
     || message.includes('The message port closed before a response was received');
-}
-
-async function runtimeError(response: Response, fallback: string): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: string };
-    const detail = body.detail ? humanizeError(body.detail) : `HTTP ${response.status}`;
-    return `${fallback}：${detail}`;
-  } catch {
-    return `${fallback}：HTTP ${response.status}`;
-  }
 }
 
 function humanizeError(value: string): string {
