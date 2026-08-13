@@ -21,6 +21,9 @@ class ResourcePlanCache:
 
     The key is built only from sanitized EvidencePack content plus the provider
     cache namespace. Raw CaptureBatch URLs and credentials never enter this cache.
+    Selection geometry is intentionally ignored: the reduced candidate set already
+    captures the user's effective scope, while tiny drag-coordinate changes should
+    not defeat a useful short-lived cache hit.
     """
 
     def __init__(self, *, ttl_seconds: float = 1200.0, max_entries: int = 64) -> None:
@@ -31,6 +34,9 @@ class ResourcePlanCache:
     def make_key(self, evidence_pack: EvidencePack, *, namespace: str) -> str:
         payload = evidence_pack.model_dump(mode="json", exclude_none=True)
         payload.pop("batch_id", None)
+        selection = payload.get("selection")
+        if isinstance(selection, dict):
+            selection.pop("rect", None)
         canonical = json.dumps(
             {"namespace": namespace, "evidence": payload},
             ensure_ascii=False,
