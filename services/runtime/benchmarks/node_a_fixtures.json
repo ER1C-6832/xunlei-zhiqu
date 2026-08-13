@@ -138,8 +138,8 @@
   },
   {
     "name": "public_media",
-    "expected_selected_any": ["media_dash_1080", "media_hls_1080"],
-    "forbidden_selected": ["media_thumbnail"],
+    "expected_selected_any": ["media_dash_1080", "media_hls_1080", "media_mp4_720"],
+    "forbidden_selected": ["media_audio", "media_thumbnail"],
     "evidence_pack": {
       "schema_version": "0.1",
       "batch_id": "bench_public_media",
