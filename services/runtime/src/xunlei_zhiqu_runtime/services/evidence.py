@@ -1,8 +1,15 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from xunlei_zhiqu_runtime.models import CaptureBatch, EvidenceCandidate, EvidencePack
+from xunlei_zhiqu_runtime.services.evidence_reducer import (
+    EvidenceReductionStats,
+    reduce_evidence_candidates,
+)
 
 
 _SAFE_METADATA_KEYS = {
@@ -35,24 +42,49 @@ _SAFE_METADATA_KEYS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class CompiledEvidence:
+    pack: EvidencePack
+    stats: EvidenceReductionStats
+
+
 def build_evidence_pack(batch: CaptureBatch) -> EvidencePack:
-    return EvidencePack(
-        batch_id=batch.batch_id,
-        page={
-            "title": batch.page.title,
-            "relevant_sections": batch.page.relevant_text[:24],
-        },
-        selection=(
-            {
-                "type": batch.selection.type,
-                "candidate_ids": batch.selection.candidate_ids,
-                "rect": batch.selection.rect.model_dump(mode="json") if batch.selection.rect else None,
-            }
-            if batch.selection
-            else None
+    """Backward-compatible helper for callers that only need the sanitized pack."""
+    return compile_evidence_pack(batch).pack
+
+
+def compile_evidence_pack(batch: CaptureBatch) -> CompiledEvidence:
+    raw_candidates = [_candidate_evidence(candidate) for candidate in batch.candidates]
+    automatic = batch.trigger == "automatic" and not (
+        batch.selection and batch.selection.type in {"rectangle", "click", "manual"}
+    )
+    reduced = reduce_evidence_candidates(raw_candidates, automatic=automatic)
+    relevant_sections = _compact_relevant_sections(batch.page.relevant_text)
+
+    page: dict[str, Any] = {
+        "title": batch.page.title,
+        "relevant_sections": relevant_sections,
+    }
+    if reduced.contexts:
+        page["contexts"] = reduced.contexts
+
+    return CompiledEvidence(
+        pack=EvidencePack(
+            batch_id=batch.batch_id,
+            page=page,
+            selection=(
+                {
+                    "type": batch.selection.type,
+                    "candidate_ids": batch.selection.candidate_ids,
+                    "rect": batch.selection.rect.model_dump(mode="json") if batch.selection.rect else None,
+                }
+                if batch.selection
+                else None
+            ),
+            device=batch.device.model_dump(mode="json") if batch.device else None,
+            candidates=reduced.candidates,
         ),
-        device=batch.device.model_dump(mode="json") if batch.device else None,
-        candidates=[_candidate_evidence(candidate) for candidate in batch.candidates],
+        stats=reduced.stats,
     )
 
 
@@ -61,25 +93,25 @@ def _candidate_evidence(candidate) -> EvidenceCandidate:
     filename = _filename(candidate, metadata)
     extension = _extension(filename, metadata)
     provenance = _provenance(candidate.capture_channel, metadata)
-    technical: dict[str, str | int | float | bool | None] = {}
+    technical: dict[str, Any] = {}
 
     for key in _SAFE_METADATA_KEYS:
-        value = metadata.get(key)
-        if isinstance(value, (str, int, float, bool)) or value is None:
+        value = _safe_metadata_value(metadata.get(key))
+        if value is not None:
             technical[key] = value
 
     if candidate.probe_facts:
-        technical.update(
-            {
-                "content_type": candidate.probe_facts.content_type,
-                "content_length": candidate.probe_facts.content_length,
-                "reachable": candidate.probe_facts.reachable,
-                "range_supported": candidate.probe_facts.range_supported,
-            }
-        )
+        probe = {
+            "content_type": candidate.probe_facts.content_type,
+            "content_length": candidate.probe_facts.content_length,
+            "reachable": candidate.probe_facts.reachable,
+            "range_supported": candidate.probe_facts.range_supported,
+        }
+        technical.update({key: value for key, value in probe.items() if value is not None})
 
     return EvidenceCandidate(
         id=candidate.candidate_id,
+        candidate_ids=[candidate.candidate_id],
         candidate_type=candidate.candidate_type,
         display_name=candidate.display_name,
         filename=filename,
@@ -111,7 +143,7 @@ def _extension(filename: str | None, metadata: dict[str, Any]) -> str | None:
     if not filename or "." not in filename:
         return None
     suffix = filename.rsplit(".", 1)[-1].lower()
-    return suffix if 1 <= len(suffix) <= 10 and suffix.isalnum() else None
+    return suffix if 1 <= len(suffix) <= 12 and suffix.isalnum() else None
 
 
 def _provenance(channel: str, metadata: dict[str, Any]) -> list[dict[str, str | None]]:
@@ -132,3 +164,38 @@ def _provenance(channel: str, metadata: dict[str, Any]) -> list[dict[str, str | 
                 }
             )
     return result or [{"channel": channel, "source_tag": None, "attribute": None}]
+
+
+def _safe_metadata_value(value: Any) -> Any | None:
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        result = [item for item in value[:16] if isinstance(item, (str, int, float, bool))]
+        return result or None
+    if isinstance(value, dict):
+        result = {
+            str(key): item
+            for key, item in list(value.items())[:16]
+            if isinstance(item, (str, int, float, bool)) or item is None
+        }
+        return result or None
+    return None
+
+
+def _compact_relevant_sections(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        compact = " ".join(value.split())
+        if not compact:
+            continue
+        if len(compact) > 220:
+            compact = f"{compact[:219].rstrip()}…"
+        key = compact.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(compact)
+        if len(result) >= 12:
+            break
+    return result
