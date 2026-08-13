@@ -25,6 +25,7 @@ import {
   TriangleAlert
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useZhiquCapabilities } from './hooks/useZhiquCapabilities';
 import {
   buildAlternativeGroups,
   recommendationForItem,
@@ -79,6 +80,7 @@ export function StageDExtensionApp() {
   const [annotationCount, setAnnotationCount] = useState(0);
   const [discovery, setDiscovery] = useState<DiscoveryState>(EMPTY_DISCOVERY);
   const [discoveryUpdating, setDiscoveryUpdating] = useState(false);
+  const capabilities = useZhiquCapabilities();
 
   const alternativeGroups = useMemo(
     () => plan ? buildAlternativeGroups(plan) : [],
@@ -86,6 +88,14 @@ export function StageDExtensionApp() {
   );
 
   const busy = ['selecting', 'scanning', 'analyzing', 'creating', 'favoriting'].includes(status);
+  const canAnalyze = capabilities?.intelligentAnalysis === true;
+  const canUseTaskRuntime = capabilities?.runtimeKind === 'demo_local'
+    || capabilities?.runtimeKind === 'client';
+  const hasDelivery = capabilities?.localDownload === true
+    || capabilities?.cloudDelivery === true;
+  const selectedDeliveryAvailable = deliveryTarget === 'local'
+    ? capabilities?.localDownload === true
+    : capabilities?.cloudDelivery === true;
 
   useEffect(() => {
     let disposed = false;
@@ -120,6 +130,17 @@ export function StageDExtensionApp() {
       chrome.runtime.onMessage.removeListener(onDiscoveryUpdate);
     };
   }, []);
+
+  useEffect(() => {
+    if (!capabilities) return;
+    setDeliveryTarget((current) => {
+      if (current === 'local' && capabilities.localDownload) return current;
+      if (current === 'cloud' && capabilities.cloudDelivery) return current;
+      if (capabilities.localDownload) return 'local';
+      if (capabilities.cloudDelivery) return 'cloud';
+      return current;
+    });
+  }, [capabilities]);
 
   function prepareLocalCapture(mode: CaptureMode) {
     setError(null);
@@ -193,6 +214,11 @@ export function StageDExtensionApp() {
 
   async function analyzeCurrentBatch(forceRefresh = false) {
     if (!batch) return;
+    if (!canAnalyze) {
+      setStatus('error');
+      setError('当前运行形态只提供本地资源发现，智能分析暂不可用。');
+      return;
+    }
     setStatus('analyzing');
     setError(null);
     setCreatedJob(null);
@@ -292,6 +318,11 @@ export function StageDExtensionApp() {
       setError('请至少选择一个要下载的资源。');
       return;
     }
+    if (!selectedDeliveryAvailable) {
+      setStatus('error');
+      setError('当前没有可用的下载交付能力，请连接迅雷客户端后再创建任务。');
+      return;
+    }
 
     const payload: ResourceJobCreateRequest = {
       schema_version: '0.1',
@@ -316,6 +347,11 @@ export function StageDExtensionApp() {
 
   async function favoriteResource() {
     if (!plan || favoriteItem) return;
+    if (!canUseTaskRuntime) {
+      setStatus('error');
+      setError('当前没有可用的任务中心，连接迅雷客户端后可使用收藏。');
+      return;
+    }
     const payload: LinkFavoriteCreateRequest = { schema_version: '0.1', plan, capture: batch };
     setStatus('favoriting');
     setError(null);
@@ -329,6 +365,11 @@ export function StageDExtensionApp() {
   }
 
   function openTaskCenter(target: 'downloads' | 'links') {
+    if (!canUseTaskRuntime) {
+      setStatus('error');
+      setError('当前没有可用的任务中心，请先连接迅雷客户端。');
+      return;
+    }
     void zhiquService.openTaskCenter(target);
   }
 
@@ -385,6 +426,12 @@ export function StageDExtensionApp() {
             onFocus={(candidateId) => void focusLocalCandidate(candidateId)}
           />
 
+          {capabilities && !canAnalyze && (
+            <div className="zhiqu-page-note">
+              <span>当前只提供本地资源发现。连接可用的智能分析服务后，才能继续比较版本和生成推荐。</span>
+            </div>
+          )}
+
           {status === 'analyzing' ? (
             <div className="zhiqu-working" role="status">
               <LoaderCircle className="spin" size={20} />
@@ -392,8 +439,8 @@ export function StageDExtensionApp() {
             </div>
           ) : (
             <div className="zhiqu-capture-actions">
-              <button className="zhiqu-primary" type="button" onClick={() => void analyzeCurrentBatch(false)} disabled={busy}>
-                <Sparkles size={18} />智能分析
+              <button className="zhiqu-primary" type="button" onClick={() => void analyzeCurrentBatch(false)} disabled={busy || !canAnalyze}>
+                <Sparkles size={18} />{canAnalyze ? '智能分析' : '智能分析暂不可用'}
               </button>
               <div className="zhiqu-capture-secondary-actions">
                 <button className="zhiqu-secondary" type="button" onClick={() => captureResources('automatic')} disabled={busy}>
@@ -438,6 +485,12 @@ export function StageDExtensionApp() {
             <Check size={20} aria-hidden="true" />
           </div>
 
+          {capabilities?.runtimeKind === 'cloud_analysis' && (
+            <div className="zhiqu-page-note">
+              <span>智能分析已经完成；当前没有客户端任务能力，连接迅雷后才能创建下载任务或收藏。</span>
+            </div>
+          )}
+
           {plan.selected.length > 0 && (
             <div className="zhiqu-page-note zhiqu-page-note-actions">
               <span>
@@ -476,7 +529,8 @@ export function StageDExtensionApp() {
                 type="button"
                 className={deliveryTarget === 'local' ? 'active' : ''}
                 onClick={() => !createdJob && setDeliveryTarget('local')}
-                disabled={Boolean(createdJob)}
+                disabled={Boolean(createdJob) || capabilities?.localDownload !== true}
+                title={capabilities?.localDownload === false ? '当前没有本地下载能力' : undefined}
               >
                 <HardDrive size={16} /><span>本地</span>
               </button>
@@ -484,7 +538,8 @@ export function StageDExtensionApp() {
                 type="button"
                 className={deliveryTarget === 'cloud' ? 'active' : ''}
                 onClick={() => !createdJob && setDeliveryTarget('cloud')}
-                disabled={Boolean(createdJob)}
+                disabled={Boolean(createdJob) || capabilities?.cloudDelivery !== true}
+                title={capabilities?.cloudDelivery === false ? '当前没有云盘交付能力' : undefined}
               >
                 <Cloud size={16} /><span>云盘</span>
               </button>
@@ -496,7 +551,8 @@ export function StageDExtensionApp() {
               className="zhiqu-favorite"
               type="button"
               onClick={favoriteResource}
-              disabled={status === 'favoriting' || Boolean(favoriteItem)}
+              disabled={status === 'favoriting' || Boolean(favoriteItem) || !canUseTaskRuntime}
+              title={!canUseTaskRuntime ? '连接迅雷客户端后可使用收藏' : undefined}
             >
               {status === 'favoriting' ? <LoaderCircle className="spin" size={17} /> : <Star size={17} fill={favoriteItem ? 'currentColor' : 'none'} />}
               {favoriteItem ? '已收藏' : '收藏'}
@@ -505,10 +561,16 @@ export function StageDExtensionApp() {
               className="zhiqu-download"
               type="button"
               onClick={createResourceJob}
-              disabled={status === 'creating' || Boolean(createdJob) || confirmedIds.size === 0}
+              disabled={status === 'creating' || Boolean(createdJob) || confirmedIds.size === 0 || !selectedDeliveryAvailable}
             >
               {status === 'creating' ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
-              {status === 'creating' ? '正在创建…' : createdJob ? '任务已创建' : '开始下载'}
+              {status === 'creating'
+                ? '正在创建…'
+                : createdJob
+                  ? '任务已创建'
+                  : hasDelivery
+                    ? '开始下载'
+                    : '连接迅雷后下载'}
             </button>
           </div>
 
@@ -546,8 +608,8 @@ export function StageDExtensionApp() {
               className="zhiqu-reselect zhiqu-reanalyze-action"
               type="button"
               onClick={() => void analyzeCurrentBatch(true)}
-              disabled={busy}
-              title="忽略当前缓存，再调用一次智能分析"
+              disabled={busy || !canAnalyze}
+              title={canAnalyze ? '忽略当前缓存，再调用一次智能分析' : '当前没有智能分析能力'}
             >
               {status === 'analyzing' ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}
               {status === 'analyzing' ? '重新分析中…' : '重新智能分析'}
