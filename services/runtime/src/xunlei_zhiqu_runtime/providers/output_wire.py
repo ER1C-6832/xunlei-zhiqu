@@ -64,10 +64,11 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
     Full-key output is accepted as a compatibility fallback if the model ignores
     the compact contract.
 
-    `role` is deterministic from the decision bucket and is therefore filled by
-    Runtime when omitted. `resource_title` is presentation metadata: when a model
-    omits it, Runtime derives a conservative fallback from a returned item label
-    instead of rejecting an otherwise grounded plan.
+    Runtime derives only presentation/structural fields that it can fill safely:
+    role comes from the decision bucket; a missing resource_type becomes unknown;
+    a missing title/overview is derived from already-returned grounded PlanItems.
+    Candidate references and recommendation semantics remain model-owned and are
+    still rejected by the deterministic validators when invalid.
     """
     raw_chars = _serialized_chars(parsed)
     expanded_keys = 0
@@ -87,10 +88,20 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
                 if isinstance(item, dict):
                     expanded_keys += _expand_item(item, group_name)
 
+    if not _non_empty_string(parsed.get("resource_type")):
+        parsed["resource_type"] = "unknown"
+        expanded_keys += 1
+
     if not _non_empty_string(parsed.get("resource_title")):
         derived_title = _derive_resource_title(parsed)
         if derived_title:
             parsed["resource_title"] = derived_title
+            expanded_keys += 1
+
+    if not _non_empty_string(parsed.get("overview")):
+        derived_overview = _derive_overview(parsed)
+        if derived_overview:
+            parsed["overview"] = derived_overview
             expanded_keys += 1
 
     recommendations = parsed.get("recommendations")
@@ -152,16 +163,32 @@ def _derive_resource_title(parsed: dict[str, object]) -> str | None:
         if _non_empty_string(value):
             return str(value).strip()[:180]
 
+    for item in _iter_plan_items(parsed):
+        label = item.get("label")
+        if _non_empty_string(label):
+            return str(label).strip()[:180]
+    return None
+
+
+def _derive_overview(parsed: dict[str, object]) -> str | None:
+    for item in _iter_plan_items(parsed):
+        for key in ("plain_explanation", "reason", "label"):
+            value = item.get(key)
+            if _non_empty_string(value):
+                return str(value).strip()[:320]
+    title = parsed.get("resource_title")
+    if _non_empty_string(title):
+        return f"已根据当前页面候选资源整理：{str(title).strip()[:180]}"
+    return None
+
+
+def _iter_plan_items(parsed: dict[str, object]):
     for group_name in ("selected", "alternatives", "uncertainties", "excluded"):
         group = parsed.get(group_name)
         items = [group] if isinstance(group, dict) else group if isinstance(group, list) else []
         for item in items:
-            if not isinstance(item, dict):
-                continue
-            label = item.get("label")
-            if _non_empty_string(label):
-                return str(label).strip()[:180]
-    return None
+            if isinstance(item, dict):
+                yield item
 
 
 def _non_empty_string(value: object) -> bool:
