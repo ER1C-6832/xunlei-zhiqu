@@ -10,8 +10,20 @@
   background: #eef5ff;
 }
 
-.zhiqu-reselect-actions .zhiqu-full-page-action {
+.zhiqu-reselect-actions .zhiqu-full-page-action,
+.zhiqu-reselect-actions .zhiqu-reanalyze-action {
   grid-column: 1 / -1;
+}
+
+.zhiqu-reanalyze-action {
+  color: #176bd3;
+  border-color: #c8daf1;
+  background: #f4f8ff;
+}
+
+.zhiqu-reanalyze-action:hover {
+  border-color: #9fc0ed;
+  background: #eaf3ff;
 }
 
 .zhiqu-page-note-actions {
