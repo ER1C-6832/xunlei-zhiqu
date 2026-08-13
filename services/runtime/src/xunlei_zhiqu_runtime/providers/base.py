@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+import time
 
 from xunlei_zhiqu_runtime.models import EvidencePack, ResourcePlan
 
@@ -19,14 +21,48 @@ class ModelProviderResponseError(ModelProviderError):
     """The provider answered, but the response could not be used as a valid ResourcePlan."""
 
 
+@dataclass(frozen=True, slots=True)
+class ModelCallMetrics:
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_tokens: int | None = None
+    latency_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ModelAnalysisResult:
+    plan: ResourcePlan
+    metrics: ModelCallMetrics
+
+
 class ModelProviderAdapter(ABC):
     """Model providers only receive a Runtime-built, sanitized EvidencePack."""
 
     name: str
 
+    @property
+    def model_name(self) -> str:
+        return self.name
+
+    @property
+    def cache_namespace(self) -> str:
+        return self.name
+
     @abstractmethod
     async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
         raise NotImplementedError
+
+    async def analyze_with_metrics(self, evidence_pack: EvidencePack) -> ModelAnalysisResult:
+        started = time.perf_counter()
+        plan = await self.analyze(evidence_pack)
+        return ModelAnalysisResult(
+            plan=plan,
+            metrics=ModelCallMetrics(
+                model=self.model_name,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            ),
+        )
 
     async def aclose(self) -> None:
         return None
