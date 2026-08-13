@@ -131,7 +131,7 @@ class PlanItem(BaseModel):
 
 class ScenarioRecommendation(BaseModel):
     scenario: Literal["current_device", "compatibility", "quality", "small_size", "manual"]
-    item_ids: list[str]
+    item_ids: list[str] = Field(min_length=1)
     summary: str
 
 
