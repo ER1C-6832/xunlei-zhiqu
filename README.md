@@ -8,9 +8,32 @@
 
 - **Stage A：已完成** — Monorepo、三端可运行骨架、环境变量与 ModelProviderAdapter。
 - **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob 数据流、云盘交付差异、链接库收藏/历史。
-- **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实 OpenAI-compatible 节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
-- **Stage D：已完成** — 普通用户 UI、本地常驻自动发现、资源扩展名 Registry、全 DOM 强信号发现、Network Media、批量图片、EvidenceReducer、节点 A 压缩规划、usage/latency 日志和轻量 ResourcePlan 内存缓存均已落地。
+- **Stage C：已完成核心验证** — 真实矩形框选、多通道候选融合、真实节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、`confirmed_item_ids` 用户确认、ResourceJob 创建。
+- **Stage D：已完成并在收口** — 普通用户 UI、本地常驻自动发现、资源扩展名 Registry、全 DOM 强信号发现、Network Media、批量图片、EvidenceReducer、节点 A 压缩规划、缓存、模型供应商适配边界和细粒度 HTTP latency 诊断。
 - **Stage E：下一阶段** — 接入真实 Download Engine、真实进度和轻量质检。
+
+## 三层边界
+
+```text
+Browser Extension -- HTTP /v1 contracts --> Runtime <-- HTTP /v1 contracts -- Task Center
+                                          |
+                                          v
+                               ModelProviderAdapter
+                                          |
+                                  StructuredChatProvider
+                                          |
+                                  ProviderApiAdapter
+                         / openai / dashscope / generic
+```
+
+- Extension 负责采集、页面联动和用户显式操作，不持有模型 Key；
+- Task Center 只消费 Runtime 的任务/链接库 API，不承载资源判断；
+- Runtime 构建脱敏 EvidencePack、调用节点 A、做确定性校验并创建 ResourceJob；
+- `NODE_A_PROFILE` 只控制我们自己的 Prompt / Evidence wire / ResourcePlan wire，不选择供应商或模型；
+- `MODEL_PROVIDER` 只选择 API 方言适配器，`MODEL_NAME` 单独选择模型；
+- Demo 可以由 Runtime 静态托管 Task Center；这是部署便利，不是代码依赖。
+
+详细决策见 `docs/adr/0001-runtime-boundaries-and-model-adapters.md`。
 
 ## 当前已实现
 
@@ -23,9 +46,10 @@
 - “智能整理”扫描当前可见区域，只做本地候选，不自动调用模型；
 - “框选页面区域”形成独立候选路径，只做本地候选；
 - “整理整个网页”覆盖完整 DOM，适合 Oracle JDK 等超长、多版本下载页；
-- 所有候选路径都允许先查看候选，再由用户明确点击“智能分析”调用真实节点 A；
+- 所有候选路径都允许先查看候选，再由用户明确点击“智能分析”调用节点 A；
 - 节点 A 完成后可一键定位真实网页中的推荐资源；
-- 普通 UI 不展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念。
+- 普通 UI 不展示 Candidate、DOM、SelectionScope、Provider、ResourcePlan、Stage、节点 A 等工程概念；
+- Runtime 地址属于部署配置：本地默认 `127.0.0.1:8765`，构建时可通过 `VITE_RUNTIME_URL` 指向远端 Runtime/Gateway；模型 Key 永远不进入扩展。
 
 #### D2 / D4 自动发现
 
@@ -69,20 +93,51 @@
 
 ### Runtime `services/runtime`
 
-- FastAPI 本地服务，只监听本机；
+- FastAPI Runtime；Demo 默认只监听本机；
 - `POST /v1/capture/analyze`；
 - Sanitized EvidencePack，Provider 不直接接收完整 CaptureBatch；
-- `OpenAICompatibleProvider` + 显式开发 `FixtureProvider`；
-- DashScope / DeepSeek V4 JSON Mode 兼容；
+- `ModelProviderAdapter` 是 Runtime 到模型层的稳定业务边界；
+- `StructuredChatProvider` 负责通用 OpenAI-compatible HTTP transport；
+- `ProviderApiAdapter` 隔离供应商方言：当前有 OpenAI、DashScope、Generic OpenAI-compatible；Fixture 仍为显式开发模式；
+- DashScope 的 `enable_thinking` 等供应商/模型特殊字段不再进入 Analyzer 或 Factory 的业务判断；
 - EvidencePack 可接收 Extension Registry hint、网络媒体事实、blob 动态媒体标记和图片尺寸/来源等安全技术 metadata；
 - D6 `EvidenceReducer` 在模型前进一步压缩脱敏事实：自动模式降低低置信 page/navigation、缩短 `nearby_text`、去重重复上下文，并把高重复签名/校验/SBOM 聚成 evidence group，同时保留全部原 Candidate ID；
-- 节点 A Prompt 明确要求把几十个候选压成少量用户可选组，不再逐候选生成长卡片；
-- 模型只能引用已有 Candidate ID，返回后仍有确定性引用校验；
-- Runtime 日志记录 raw candidate、AI evidence group、evidence chars、input/output/cached tokens、cache hit、latency 和 model，不记录敏感 URL；
-- bounded in-memory ResourcePlan cache，默认 20 分钟 TTL / 64 条，相同脱敏证据 + 模型 + Prompt 版本短时间重复分析不再调用模型；
+- `wire2` / `pipeline` 是我们的协议 A/B profile，与供应商/模型选择分离；
+- 模型只能引用已有 Candidate ID，返回后仍有确定性引用/设备兼容/主资源校验；
+- bounded in-memory ResourcePlan cache，默认 20 分钟 TTL / 64 条；
 - ResourceJob 创建、列表、暂停 / 恢复；
 - 链接库收藏 / 历史；
 - 当前 Job Store 仍为进程内轻量状态。
+
+#### D6 HTTP latency 拆分
+
+模型调用不再只有一个模糊的 `http_ms`。Runtime 使用 HTTPX/HTTPCore trace 在客户端可观测范围内记录：
+
+```text
+dispatch_ms
++ tcp_connect_ms
++ tls_handshake_ms
++ request_headers_ms
++ request_body_ms
++ upstream_wait_ms
++ response_body_ms
++ response_close_ms
++ transport_unattributed_ms
+```
+
+同时记录：
+
+```text
+connection_reused
+http_version
+client_transport_ms
+provider_reported_ms   # 只有供应商返回可安全解释的单一 Server-Timing dur 时
+response_bytes
+```
+
+`upstream_wait_ms` 是“请求已发送后等待响应头”的客户端观测值，包含公网/代理 RTT、供应商网关/排队和模型处理；客户端不能在供应商没有遥测的情况下把它伪装成纯模型推理时间。供应商若返回 `Server-Timing`，只额外记录其明确报告的数据。
+
+另外 `node_a_provider_timing` 继续区分 JSON build/parse、normalize、Pydantic validate 等本地 Provider 工作；`node_a_analysis` 区分 Evidence compile、cache、provider roundtrip、deterministic guards 与 Runtime local overhead。
 
 ### 任务中心 `apps/task-center`
 
@@ -92,7 +147,8 @@
 - Runtime 任务快照刷新、暂停 / 恢复；
 - 任务详情中的目标、选择、问题、下一步；
 - 链接库收藏 / 历史；
-- Stage D 没有继续扩张 Task Center UI，只保证能正确接收新 ResourceJob。
+- Stage D 没有继续扩张 Task Center UI，只保证能正确接收新 ResourceJob；
+- 开发默认调用本地 Runtime；生产 build 未设置 `VITE_RUNTIME_URL` 时使用 `window.location.origin`，因此可由本地或远端 Runtime 同源托管；分离部署时显式设置 `VITE_RUNTIME_URL`。
 
 ## Stage D 完成边界
 
@@ -103,7 +159,7 @@ Stage D 已收口在“强发现 + 简单 UI + 节点 A 产品化”，仍然**�
 - 节点 B；
 - SQLite / 完整 ResourceGraph / 事件溯源；
 - 视觉模型；
-- 微服务或复杂 AI Gateway；
+- 微服务或真正的云端 AI Gateway；
 - 大量 pytest / Playwright。
 
 下一步 Stage E 才开始真实下载执行。
@@ -124,14 +180,16 @@ uv sync --project services/runtime
 Copy-Item .env.example .env
 ```
 
-真实节点 A 默认使用 OpenAI-compatible Provider。API Key 只写 Runtime 本地 `.env`：
+API Key 只写 Runtime 本地 `.env`。以当前 DashScope + DeepSeek Demo 为例：
 
 ```dotenv
-MODEL_PROVIDER=openai_compatible
+MODEL_PROVIDER=dashscope
 ENABLE_FIXTURE_PROVIDER=false
 MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MODEL_NAME=deepseek-v4-flash
 MODEL_API_KEY=your-local-runtime-key
+
+NODE_A_PROFILE=pipeline
 MODEL_CONNECT_TIMEOUT_SECONDS=10
 MODEL_READ_TIMEOUT_SECONDS=120
 MODEL_WRITE_TIMEOUT_SECONDS=30
@@ -140,6 +198,16 @@ PLAN_CACHE_TTL_SECONDS=1200
 PLAN_CACHE_MAX_ENTRIES=64
 ```
 
+供应商和模型是独立配置：
+
+```text
+MODEL_PROVIDER=openai            + MODEL_NAME=<OpenAI model>
+MODEL_PROVIDER=dashscope         + MODEL_NAME=<Qwen/DeepSeek/etc. available there>
+MODEL_PROVIDER=openai_compatible + MODEL_NAME=<compatible model>
+```
+
+旧 `.env` 若仍为 `MODEL_PROVIDER=openai_compatible` 且 URL 是 `*.aliyuncs.com`，Runtime 会为兼容旧配置暂时自动选择 DashScope adapter 并打印迁移 warning；建议改成显式 `MODEL_PROVIDER=dashscope`。
+
 Fixture 只能显式开发开启：
 
 ```dotenv
@@ -147,12 +215,36 @@ MODEL_PROVIDER=fixture
 ENABLE_FIXTURE_PROVIDER=true
 ```
 
+## 部署配置
+
+Extension 本地开发无需额外配置。以后构建给远端 Runtime 时，在 `apps/extension/.env.local` 或 shell 中设置：
+
+```dotenv
+VITE_RUNTIME_URL=https://runtime.example.com
+```
+
+Task Center 开发默认 `http://127.0.0.1:8765`；生产 build 默认同源。若前端和 Runtime 分离部署，在 `apps/task-center/.env.local` 设置同名变量。
+
+远端 Task Center Origin 还需要加入 Runtime：
+
+```dotenv
+RUNTIME_CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,https://task-center.example.com
+```
+
+这些都是公开部署地址，不是模型凭证。
+
 ## D6 性能观察
 
-每次真实节点 A 分析完成后，Runtime 会输出类似：
+常规成本日志：
 
 ```text
-node_a_analysis model=deepseek-v4-flash candidate_raw_count=40 candidate_ai_count=18 evidence_chars=7200 input_tokens=3600 output_tokens=1200 cached_tokens=0 cache_hit=false latency_ms=8200 dropped_navigation=7 grouped_candidates=15 context_count=3
+node_a_analysis model=deepseek-v4-flash candidate_raw_count=25 candidate_ai_count=13 input_tokens=3129 output_tokens=494 cache_hit=false latency_ms=6897 ...
+```
+
+细粒度模型 HTTP 调用新增：
+
+```text
+node_a_http_trace api_provider=dashscope model=deepseek-v4-flash http_version=HTTP/1.1 connection_reused=true dispatch_ms=... tcp_connect_ms=... tls_handshake_ms=... request_headers_ms=... request_body_ms=... upstream_wait_ms=... response_body_ms=... response_close_ms=... transport_unattributed_ms=... client_transport_ms=... provider_reported_ms=... response_bytes=...
 ```
 
 同一份脱敏证据短时间重复分析命中 Runtime 本地缓存时：
@@ -160,8 +252,6 @@ node_a_analysis model=deepseek-v4-flash candidate_raw_count=40 candidate_ai_coun
 ```text
 cache_hit=true input_tokens=0 output_tokens=0
 ```
-
-这比单纯看 `prompt_chars` 更适合判断真实成本和等待时间。目标是 Python / Oracle 这类 20~60 原始候选页面相较 Stage C/D5 明显降低输入与输出规模；如果某个真实页面为了准确性需要更高 Token，可以接受，不以硬阈值牺牲资源选择质量。
 
 ## 开发启动
 
@@ -202,7 +292,7 @@ uv run --project services/runtime python -m compileall services/runtime/src
 
 D5 使用了 `webRequest` 权限，重新构建后需要在 `chrome://extensions/` / `edge://extensions/` 对扩展点一次“重新加载”，并刷新待测试网页。
 
-任务中心生产地址：
+任务中心生产地址（本地 Demo）：
 
 ```text
 http://127.0.0.1:8765/app/
@@ -219,9 +309,9 @@ http://127.0.0.1:8765/docs
 ```text
 apps/extension          Manifest V3 迅雷智取扩展
 apps/task-center        迅雷 17 风格 React 任务中心
-services/runtime        FastAPI 本地 Runtime
+services/runtime        FastAPI Runtime
 packages/contracts      最小跨模块 TypeScript 契约
 docs/blueprint          当前产品和架构事实来源
-docs/adr                只记录高成本决策
+docs/adr                高成本决策与边界说明
 demo                    受控资源页与故障场景
 ```
