@@ -1,3 +1,4 @@
+import json
 import logging
 
 from xunlei_zhiqu_runtime.config import Settings
@@ -15,6 +16,11 @@ from xunlei_zhiqu_runtime.providers.output_wire3 import (
     WIRE3_OUTPUT_CONTRACT,
     WIRE3_SYSTEM_SUFFIX,
     expand_positional_resource_plan,
+)
+from xunlei_zhiqu_runtime.providers.pipeline_wire import (
+    PIPELINE_OUTPUT_CONTRACT,
+    PIPELINE_SYSTEM_SUFFIX,
+    build_pipeline_request,
 )
 
 
@@ -110,8 +116,6 @@ def _wire2_normalizer(parsed: dict[str, object]) -> dict[str, int]:
 
 
 def _wire3_normalizer(parsed: dict[str, object]) -> dict[str, int]:
-    # Positional wire3 first; then accept wire2 short-key objects as a graceful
-    # fallback if the model partially ignores the stricter positional contract.
     expand_positional_resource_plan(parsed)
     expand_compact_resource_plan(parsed)
     return _BASE_NORMALIZER(parsed)
@@ -124,81 +128,94 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
                 "FixtureProvider is development-only; set ENABLE_FIXTURE_PROVIDER=true explicitly"
             )
         return FixtureProvider()
-    if settings.model_provider == "openai_compatible":
-        key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
-        use_wire = False
-        provider_model = settings.model_name
-        # create_provider can be called repeatedly in tests/reload paths; always
-        # restore the normal full-key normalizer before selecting an A/B profile.
-        openai_compatible._normalize_model_resource_plan = _BASE_NORMALIZER
+    if settings.model_provider != "openai_compatible":
+        raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
 
-        if settings.node_a_profile == "fast":
-            openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
-            openai_compatible.OUTPUT_CONTRACT = _FAST_OUTPUT_CONTRACT
-            openai_compatible.PROMPT_VERSION = "stage-d6-fast-v2"
-            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
-        elif settings.node_a_profile == "wire":
-            # Cost baseline: fast-v2 prompt/output + lossless model-facing evidence compaction.
-            openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
-            openai_compatible.OUTPUT_CONTRACT = _FAST_OUTPUT_CONTRACT
-            openai_compatible.PROMPT_VERSION = "stage-d6-wire-v1"
-            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
-            use_wire = True
-        elif settings.node_a_profile == "wire2":
-            # Proven cost/speed baseline: wire-v1 evidence + short ResourcePlan keys.
-            openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE2_SYSTEM_SUFFIX}"
-            openai_compatible.OUTPUT_CONTRACT = WIRE2_OUTPUT_CONTRACT
-            openai_compatible.PROMPT_VERSION = "stage-d6-wire2-v1"
-            openai_compatible._normalize_model_resource_plan = _wire2_normalizer
-            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
-            use_wire = True
-        elif settings.node_a_profile == "latency":
-            # Latency A/B: freeze the proven wire2 evidence/output protocol and
-            # deterministic guards, changing only the model. The default
-            # qwen-flash model uses the same Beijing OpenAI-compatible endpoint
-            # and JSON mode, so this isolates model/service decode latency.
-            openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE2_SYSTEM_SUFFIX}"
-            openai_compatible.OUTPUT_CONTRACT = WIRE2_OUTPUT_CONTRACT
-            openai_compatible.PROMPT_VERSION = "stage-d6-latency-wire2-v1"
-            openai_compatible._normalize_model_resource_plan = _wire2_normalizer
-            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
-            provider_model = settings.node_a_latency_model.strip() or settings.model_name
-            use_wire = True
-        elif settings.node_a_profile == "wire3":
-            # Failed/experimental lineage retained for reproducibility only.
-            openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE3_SYSTEM_SUFFIX}"
-            openai_compatible.OUTPUT_CONTRACT = WIRE3_OUTPUT_CONTRACT
-            openai_compatible.PROMPT_VERSION = "stage-d6-wire3-v1"
-            openai_compatible._normalize_model_resource_plan = _wire3_normalizer
-            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
-            use_wire = True
-        elif settings.node_a_profile == "compact":
-            openai_compatible.SYSTEM_PROMPT = _COMPACT_SYSTEM_PROMPT
-            openai_compatible.OUTPUT_CONTRACT = _COMPACT_OUTPUT_CONTRACT
-            openai_compatible.PROMPT_VERSION = "stage-d6-compact-v1"
-            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
-        else:
-            # Preserve the proven quality baseline byte-for-byte.
-            openai_compatible.SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT
-            openai_compatible.OUTPUT_CONTRACT = _BASE_OUTPUT_CONTRACT
-            openai_compatible.PROMPT_VERSION = _BASE_PROMPT_VERSION
-            max_completion_tokens = settings.model_max_completion_tokens
+    key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
+    use_wire = False
+    provider_model = settings.model_name
+    system_prompt = _BASE_SYSTEM_PROMPT
+    output_contract: dict[str, object] = _BASE_OUTPUT_CONTRACT
+    prompt_version = _BASE_PROMPT_VERSION
+    normalizer = _BASE_NORMALIZER
+    request_builder = None
+    max_completion_tokens = settings.model_max_completion_tokens
 
-        logger.info(
-            "node_a_profile profile=%s prompt_version=%s model=%s max_completion_tokens=%d",
-            settings.node_a_profile,
-            openai_compatible.PROMPT_VERSION,
-            provider_model,
-            max_completion_tokens,
+    if settings.node_a_profile == "fast":
+        system_prompt = _FAST_SYSTEM_PROMPT
+        output_contract = _FAST_OUTPUT_CONTRACT
+        prompt_version = "stage-d6-fast-v2"
+        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+    elif settings.node_a_profile == "wire":
+        system_prompt = _FAST_SYSTEM_PROMPT
+        output_contract = _FAST_OUTPUT_CONTRACT
+        prompt_version = "stage-d6-wire-v1"
+        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        use_wire = True
+    elif settings.node_a_profile == "wire2":
+        system_prompt = f"{_FAST_SYSTEM_PROMPT}{WIRE2_SYSTEM_SUFFIX}"
+        output_contract = WIRE2_OUTPUT_CONTRACT
+        prompt_version = "stage-d6-wire2-v1"
+        normalizer = _wire2_normalizer
+        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        use_wire = True
+    elif settings.node_a_profile == "pipeline":
+        # Full transport-path A/B from wire2. Keep the same model and reducer,
+        # but compact repeated EvidencePack field names, move the fixed protocol
+        # into the system prefix, derive role locally, and send only changing
+        # evidence in the user message.
+        compact_contract = json.dumps(
+            PIPELINE_OUTPUT_CONTRACT,
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
-        provider: ModelProviderAdapter = OpenAICompatibleProvider(
-            base_url=settings.model_base_url,
-            api_key=key,
-            model=provider_model,
-            connect_timeout_seconds=settings.model_connect_timeout_seconds,
-            read_timeout_seconds=settings.model_read_timeout_seconds,
-            write_timeout_seconds=settings.model_write_timeout_seconds,
-            max_completion_tokens=max_completion_tokens,
-        )
-        return EvidenceWireProvider(provider) if use_wire else provider
-    raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
+        system_prompt = f"{_FAST_SYSTEM_PROMPT}{PIPELINE_SYSTEM_SUFFIX}\noutput_contract={compact_contract}"
+        output_contract = PIPELINE_OUTPUT_CONTRACT
+        prompt_version = "stage-d6-pipeline-v1"
+        normalizer = _wire2_normalizer
+        request_builder = build_pipeline_request
+        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        use_wire = True
+    elif settings.node_a_profile == "latency":
+        system_prompt = f"{_FAST_SYSTEM_PROMPT}{WIRE2_SYSTEM_SUFFIX}"
+        output_contract = WIRE2_OUTPUT_CONTRACT
+        prompt_version = "stage-d6-latency-wire2-v1"
+        normalizer = _wire2_normalizer
+        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        provider_model = settings.node_a_latency_model.strip() or settings.model_name
+        use_wire = True
+    elif settings.node_a_profile == "wire3":
+        system_prompt = f"{_FAST_SYSTEM_PROMPT}{WIRE3_SYSTEM_SUFFIX}"
+        output_contract = WIRE3_OUTPUT_CONTRACT
+        prompt_version = "stage-d6-wire3-v1"
+        normalizer = _wire3_normalizer
+        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        use_wire = True
+    elif settings.node_a_profile == "compact":
+        system_prompt = _COMPACT_SYSTEM_PROMPT
+        output_contract = _COMPACT_OUTPUT_CONTRACT
+        prompt_version = "stage-d6-compact-v1"
+        max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+
+    logger.info(
+        "node_a_profile profile=%s prompt_version=%s model=%s max_completion_tokens=%d",
+        settings.node_a_profile,
+        prompt_version,
+        provider_model,
+        max_completion_tokens,
+    )
+    provider: ModelProviderAdapter = OpenAICompatibleProvider(
+        base_url=settings.model_base_url,
+        api_key=key,
+        model=provider_model,
+        connect_timeout_seconds=settings.model_connect_timeout_seconds,
+        read_timeout_seconds=settings.model_read_timeout_seconds,
+        write_timeout_seconds=settings.model_write_timeout_seconds,
+        max_completion_tokens=max_completion_tokens,
+        system_prompt=system_prompt,
+        output_contract=output_contract,
+        prompt_version=prompt_version,
+        normalizer=normalizer,
+        request_builder=request_builder,
+    )
+    return EvidenceWireProvider(provider) if use_wire else provider
