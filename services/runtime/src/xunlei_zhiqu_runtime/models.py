@@ -97,16 +97,18 @@ class CaptureBatch(BaseModel):
 
 class EvidenceCandidate(BaseModel):
     id: str
+    candidate_ids: list[str] = Field(default_factory=list)
     candidate_type: Literal["file", "magnet", "media", "image", "page", "unknown"]
     display_name: str | None = None
     filename: str | None = None
     extension: str | None = None
     anchor_text: str | None = None
     nearby_text: str | None = None
+    context_ref: str | None = None
     section_heading: str | None = None
     selection_overlap: float | None = Field(default=None, ge=0, le=1)
     capture_provenance: list[dict[str, str | None]] = Field(default_factory=list)
-    technical_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    technical_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvidencePack(BaseModel):
