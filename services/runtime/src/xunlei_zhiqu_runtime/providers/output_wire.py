@@ -35,6 +35,12 @@ RECOMMENDATION_KEYS = {
 }
 
 PLAN_GROUPS = ("selected", "alternatives", "excluded", "uncertainties")
+ROLE_BY_GROUP = {
+    "selected": "primary",
+    "alternatives": "alternative",
+    "excluded": "excluded",
+    "uncertainties": "unknown",
+}
 
 
 WIRE2_OUTPUT_CONTRACT = {
@@ -57,6 +63,10 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
     still run afterwards, so compact output cannot bypass deterministic validation.
     Full-key output is accepted as a compatibility fallback if the model ignores
     the compact contract.
+
+    `role` is deterministic from the decision bucket and is therefore filled by
+    Runtime when omitted. A provider should not fail merely because a model did
+    not repeat information Runtime already owns.
     """
     raw_chars = _serialized_chars(parsed)
     expanded_keys = 0
@@ -70,11 +80,11 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
     for group_name in PLAN_GROUPS:
         group = parsed.get(group_name)
         if isinstance(group, dict):
-            expanded_keys += _expand_item(group)
+            expanded_keys += _expand_item(group, group_name)
         elif isinstance(group, list):
             for item in group:
                 if isinstance(item, dict):
-                    expanded_keys += _expand_item(item)
+                    expanded_keys += _expand_item(item, group_name)
 
     recommendations = parsed.get("recommendations")
     if isinstance(recommendations, dict):
@@ -89,7 +99,7 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
         savings = max(0, expanded_chars - raw_chars)
         saved_pct = (savings / expanded_chars * 100.0) if expanded_chars else 0.0
         logger.info(
-            "node_a_output_wire compact_keys=%d raw_chars=%d expanded_chars=%d saved_chars=%d saved_pct=%.1f",
+            "node_a_output_wire compact_or_derived_keys=%d raw_chars=%d expanded_chars=%d saved_chars=%d saved_pct=%.1f",
             expanded_keys,
             raw_chars,
             expanded_chars,
@@ -98,20 +108,24 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
         )
     else:
         logger.info(
-            "node_a_output_wire compact_keys=0 raw_chars=%d expanded_chars=%d saved_chars=0 saved_pct=0.0",
+            "node_a_output_wire compact_or_derived_keys=0 raw_chars=%d expanded_chars=%d saved_chars=0 saved_pct=0.0",
             raw_chars,
             expanded_chars,
         )
     return expanded_keys
 
 
-def _expand_item(item: dict[str, object]) -> int:
+def _expand_item(item: dict[str, object], group_name: str) -> int:
     expanded = 0
     for short_key, full_key in ITEM_KEYS.items():
         if full_key not in item and short_key in item:
             item[full_key] = item[short_key]
             expanded += 1
         item.pop(short_key, None)
+
+    if not isinstance(item.get("role"), str) or not str(item.get("role") or "").strip():
+        item["role"] = ROLE_BY_GROUP[group_name]
+        expanded += 1
     return expanded
 
 
