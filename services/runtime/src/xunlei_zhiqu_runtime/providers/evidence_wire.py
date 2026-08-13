@@ -5,12 +5,8 @@ import json
 import logging
 import re
 
-from xunlei_zhiqu_runtime.models import EvidenceCandidate, EvidencePack
-from xunlei_zhiqu_runtime.providers.base import (
-    ModelAnalysisResult,
-    ModelProviderAdapter,
-    ResourcePlan,
-)
+from xunlei_zhiqu_runtime.models import EvidenceCandidate, EvidencePack, ResourcePlan
+from xunlei_zhiqu_runtime.providers.base import ModelAnalysisResult, ModelProviderAdapter
 
 
 logger = logging.getLogger("uvicorn.error")
