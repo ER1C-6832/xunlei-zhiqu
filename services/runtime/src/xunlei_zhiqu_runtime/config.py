@@ -16,18 +16,16 @@ class Settings(BaseSettings):
     model_read_timeout_seconds: float = 120.0
     model_write_timeout_seconds: float = 30.0
     # Stage D6 A/B profiles. wire2 is the proven cost/speed baseline. pipeline
-    # continues from wire2 by optimizing only Runtime-owned transport: compact
-    # request keys, deterministic output fields, fixed protocol placement and
-    # connection reuse. latency is retained only for model-only comparison.
+    # continues from wire2 by optimizing only Runtime-owned transport. latency is
+    # retained only for model-only comparison; failed compact/wire3 experiments
+    # were removed rather than kept as production configuration surface.
     model_max_completion_tokens: int = 4096
     node_a_profile: Literal[
         "quality",
         "fast",
-        "compact",
         "wire",
         "wire2",
         "pipeline",
-        "wire3",
         "latency",
     ] = "quality"
     node_a_latency_model: str = "qwen-flash"
