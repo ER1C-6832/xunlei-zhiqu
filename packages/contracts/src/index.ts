@@ -131,6 +131,16 @@ export interface ManualJobCreateRequest {
   destination?: string | null;
 }
 
+export interface LinkFavoriteCreateRequest {
+  schema_version: '0.1';
+  plan: ResourcePlan;
+  capture?: CaptureBatch | null;
+}
+
+export interface LinkFavoriteUpdateRequest {
+  favorite: boolean;
+}
+
 export interface ResourceJobSnapshot {
   job_id: string;
   title: string;
@@ -155,7 +165,7 @@ export interface ResourceJobSnapshot {
   resource_type: ResourceType;
   plan_overview?: string | null;
   selected_items: string[];
-  alternative_count: number;
+  alternative_count?: number;
   source_page?: string | null;
 }
 
