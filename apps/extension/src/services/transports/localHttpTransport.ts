@@ -8,8 +8,8 @@ import type {
   ResourcePlan
 } from '@xunlei-zhiqu/contracts';
 import type {
-  AnalyzeResourcesOptions,
   TaskCenterTarget,
+  TransportAnalyzeResourcesOptions,
   ZhiquServiceTransport
 } from '../zhiquServiceClient';
 
@@ -27,14 +27,25 @@ export class ZhiquTransportError extends Error {
 
 export class LocalHttpTransport implements ZhiquServiceTransport {
   private readonly endpoint: string;
+  private readonly sessionToken: string | null;
 
-  constructor(endpoint = getRuntimeEndpoint()) {
+  constructor(
+    endpoint = getRuntimeEndpoint(),
+    sessionToken = getRuntimeSessionToken()
+  ) {
     this.endpoint = normalizeEndpoint(endpoint);
+    this.sessionToken = sessionToken;
   }
 
-  analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions): Promise<ResourcePlan> {
-    const forceRefresh = options?.forceRefresh === true;
+  analyzeResources(
+    batch: CaptureBatch,
+    options: TransportAnalyzeResourcesOptions
+  ): Promise<ResourcePlan> {
+    const forceRefresh = options.forceRefresh === true;
     const suffix = forceRefresh ? '?refresh=true' : '';
+    // AnalysisCredential is a logical authorization handle. The local Demo transport
+    // intentionally does not serialize it into CaptureBatch; future client/cloud
+    // transports resolve the handle at their own authentication boundary.
     return this.postJson<ResourcePlan>(
       `/v1/capture/analyze${suffix}`,
       batch,
@@ -59,11 +70,14 @@ export class LocalHttpTransport implements ZhiquServiceTransport {
   }
 
   private async postJson<T>(path: string, body: unknown, fallback: string): Promise<T> {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    if (this.sessionToken) headers.set('X-Zhiqu-Session', this.sessionToken);
+
     let response: Response;
     try {
       response = await fetch(`${this.endpoint}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body)
       });
     } catch (error) {
@@ -85,6 +99,11 @@ export class LocalHttpTransport implements ZhiquServiceTransport {
 export function getRuntimeEndpoint(): string {
   const configured = import.meta.env.VITE_RUNTIME_URL?.trim();
   return normalizeEndpoint(configured || DEFAULT_RUNTIME_ENDPOINT);
+}
+
+export function getRuntimeSessionToken(): string | null {
+  const configured = import.meta.env.VITE_RUNTIME_SESSION?.trim();
+  return configured || null;
 }
 
 function normalizeEndpoint(value: string): string {

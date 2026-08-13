@@ -43,8 +43,8 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { taskService, type RuntimeInfo } from './services/taskServiceClient';
 
-const API_URL = import.meta.env.VITE_RUNTIME_URL || 'http://127.0.0.1:8765';
 const SETTINGS_KEY = 'xunlei-zhiqu.stage-b.readable.preferences';
 const CLOUD_TOTAL_BYTES = 3 * 1024 ** 4;
 
@@ -57,7 +57,6 @@ type TaskKindFilter = 'all' | 'zhiqu' | 'normal';
 type TaskStateFilter = 'all' | 'running' | 'paused' | 'issue';
 type SortMode = 'newest' | 'progress' | 'speed';
 type ToastState = { message: string; tone?: 'normal' | 'warning' } | null;
-type RuntimeInfo = { status: string; provider: string; version: string };
 type TaskFilter = { kind: TaskKindFilter; state: TaskStateFilter; sort: SortMode };
 type Preferences = { refreshMs: 1500 | 3000 | 5000; showTechnical: boolean; notifications: boolean };
 
@@ -180,16 +179,14 @@ export function StageBReadableApp() {
 
   const syncData = useCallback(async (showError = false) => {
     try {
-      const [jobsResponse, libraryResponse, healthResponse] = await Promise.all([
-        fetch(`${API_URL}/v1/jobs`, { cache: 'no-store' }),
-        fetch(`${API_URL}/v1/link-library`, { cache: 'no-store' }),
-        fetch(`${API_URL}/v1/health`, { cache: 'no-store' })
+      const [nextJobs, nextLibrary, nextRuntimeInfo] = await Promise.all([
+        taskService.listJobs(),
+        taskService.listLinkLibrary(),
+        taskService.getRuntimeInfo()
       ]);
-      if (!jobsResponse.ok) throw new Error(`任务 HTTP ${jobsResponse.status}`);
-      if (!libraryResponse.ok) throw new Error(`链接库 HTTP ${libraryResponse.status}`);
-      setJobs((await jobsResponse.json()) as ResourceJobSnapshot[]);
-      setLibrary((await libraryResponse.json()) as LinkHistoryItem[]);
-      if (healthResponse.ok) setRuntimeInfo((await healthResponse.json()) as RuntimeInfo);
+      setJobs(nextJobs);
+      setLibrary(nextLibrary);
+      setRuntimeInfo(nextRuntimeInfo);
       setRuntimeConnected(true);
     } catch (error) {
       setRuntimeConnected(false);
@@ -292,9 +289,9 @@ export function StageBReadableApp() {
     const operation = job.status === 'paused' ? 'resume' : 'pause';
     setActionJobId(job.job_id);
     try {
-      const response = await fetch(`${API_URL}/v1/jobs/${job.job_id}/${operation}`, { method: 'POST' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const updated = (await response.json()) as ResourceJobSnapshot;
+      const updated = operation === 'pause'
+        ? await taskService.pauseJob(job.job_id)
+        : await taskService.resumeJob(job.job_id);
       setJobs((current) => current.map((item) => item.job_id === updated.job_id ? updated : item));
       setToast({ message: operation === 'pause' ? '任务已暂停' : '任务已恢复' });
     } catch (error) {
@@ -314,10 +311,9 @@ export function StageBReadableApp() {
       return;
     }
     try {
-      await Promise.all(targets.map(async (job) => {
-        const response = await fetch(`${API_URL}/v1/jobs/${job.job_id}/${operation}`, { method: 'POST' });
-        if (!response.ok) throw new Error(`${job.title} 操作失败`);
-      }));
+      await Promise.all(targets.map((job) => operation === 'pause'
+        ? taskService.pauseJob(job.job_id)
+        : taskService.resumeJob(job.job_id)));
       await syncData();
       setToast({ message: operation === 'pause' ? `已暂停 ${targets.length} 个任务` : `已恢复 ${targets.length} 个任务` });
     } catch (error) {
@@ -327,13 +323,7 @@ export function StageBReadableApp() {
 
   async function toggleFavorite(item: LinkHistoryItem) {
     try {
-      const response = await fetch(`${API_URL}/v1/link-library/${item.history_id}/favorite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ favorite: !item.favorite })
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const updated = (await response.json()) as LinkHistoryItem;
+      const updated = await taskService.setFavorite(item.history_id, { favorite: !item.favorite });
       setLibrary((current) => current.map((entry) => entry.history_id === updated.history_id ? updated : entry));
       setToast({ message: updated.favorite ? '已加入收藏' : '已取消收藏' });
     } catch (error) {
@@ -342,13 +332,7 @@ export function StageBReadableApp() {
   }
 
   async function createManualTask(payload: ManualJobCreateRequest) {
-    const response = await fetch(`${API_URL}/v1/jobs/manual`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) throw new Error(`Runtime 返回 ${response.status}`);
-    const job = (await response.json()) as ResourceJobSnapshot;
+    const job = await taskService.createManualJob(payload);
     await syncData();
     setNewTaskOpen(false);
     changePage(job.delivery_target === 'cloud' ? 'cloud' : 'downloads');

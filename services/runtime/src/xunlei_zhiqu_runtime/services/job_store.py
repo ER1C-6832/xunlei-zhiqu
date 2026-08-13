@@ -326,6 +326,34 @@ def resume_job(job_id: str) -> ResourceJobSnapshot | None:
     return job
 
 
+def cancel_job(job_id: str) -> bool:
+    index = _find_index(job_id)
+    if index is None:
+        return False
+
+    _jobs.pop(index)
+    _created_job_ids.discard(job_id)
+    _job_contexts.pop(job_id, None)
+
+    retained_history: list[LinkHistoryItem] = []
+    for item in _history:
+        if item.job_id != job_id:
+            retained_history.append(item)
+            continue
+        if item.favorite:
+            retained_history.append(
+                item.model_copy(
+                    update={
+                        "job_id": None,
+                        "delivery_target": None,
+                        "status": "saved",
+                    }
+                )
+            )
+    _history[:] = retained_history
+    return True
+
+
 def _selected_total_bytes(payload: ResourceJobCreateRequest, selected_order: list[str]) -> int:
     return _selected_total_bytes_from_capture(payload.capture, selected_order)
 

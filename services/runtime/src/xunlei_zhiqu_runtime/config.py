@@ -42,6 +42,10 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173,http://localhost:5173,"
         "http://127.0.0.1:8765,http://localhost:8765"
     )
+    # E0.9 keeps today's localhost Demo open by default while freezing the
+    # authentication seam needed before Stage E writes real files.
+    runtime_auth_mode: Literal["off", "static_token"] = "off"
+    runtime_static_session_token: SecretStr | None = None
     log_level: str = "INFO"
 
     @property

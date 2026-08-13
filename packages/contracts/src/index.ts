@@ -8,6 +8,13 @@ export type CaptureChannel =
   | 'manual';
 export type DeliveryTarget = 'local' | 'cloud';
 export type ZhiquRuntimeKind = 'demo_local' | 'client' | 'cloud_analysis' | 'none';
+export type AnalysisCredentialKind =
+  | 'demo'
+  | 'anonymous'
+  | 'client_session'
+  | 'web_session'
+  | 'guest_trial';
+export type TaskAction = 'pause' | 'resume' | 'cancel' | 'continue_acquisition' | 'open';
 export type ResourceType =
   | 'software'
   | 'document'
@@ -30,6 +37,17 @@ export interface ZhiquCapabilities {
   cloudDelivery: boolean;
   reacquisition: boolean;
   runtimeKind: ZhiquRuntimeKind;
+}
+
+export interface AnalysisCredential {
+  schema_version: '0.1';
+  kind: AnalysisCredentialKind;
+  credential_id?: string | null;
+}
+
+export interface AnalysisAccess {
+  canAnalyze: boolean;
+  analysisCredential: AnalysisCredential | null;
 }
 
 export interface DomRect {
@@ -91,6 +109,35 @@ export interface CaptureBatch {
   device?: DeviceContext | null;
   candidates: CapturedResourceCandidate[];
   metadata?: Record<string, unknown>;
+}
+
+export interface CloudAnalysisCandidate {
+  candidate_id: string;
+  candidate_type: CandidateType;
+  capture_channel: CaptureChannel;
+  display_name?: string | null;
+  filename?: string | null;
+  extension?: string | null;
+  anchor_text?: string | null;
+  nearby_text?: string | null;
+  section_heading?: string | null;
+  resource_family_hint?: string | null;
+  technical_metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface CloudAnalysisRequest {
+  schema_version: '0.1';
+  source_batch_id: string;
+  trigger: CaptureBatch['trigger'];
+  page: {
+    title: string;
+  };
+  selection?: {
+    type: CaptureSelection['type'];
+    candidate_ids?: string[];
+  } | null;
+  device?: DeviceContext | null;
+  candidates: CloudAnalysisCandidate[];
 }
 
 export interface PlanItem {

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from xunlei_zhiqu_runtime import __version__
@@ -27,8 +27,15 @@ from xunlei_zhiqu_runtime.providers.base import (
 )
 from xunlei_zhiqu_runtime.providers.factory import create_provider
 from xunlei_zhiqu_runtime.services.analyzer import CaptureAnalyzer
+from xunlei_zhiqu_runtime.services.client_session import create_client_session_auth
 from xunlei_zhiqu_runtime.services.confirmation import compile_confirmed_request
+from xunlei_zhiqu_runtime.services.download_executor import (
+    NoopDownloadExecutor,
+    execution_request_from_manual_job,
+    execution_request_from_resource_job,
+)
 from xunlei_zhiqu_runtime.services.job_store import (
+    cancel_job,
     create_favorite,
     create_job,
     create_manual_job,
@@ -46,8 +53,18 @@ from xunlei_zhiqu_runtime.services.plan_cache import ResourcePlanCache
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     provider = create_provider(settings)
+    session_token = (
+        settings.runtime_static_session_token.get_secret_value()
+        if settings.runtime_static_session_token is not None
+        else None
+    )
     app.state.settings = settings
     app.state.provider = provider
+    app.state.client_session_auth = create_client_session_auth(
+        settings.runtime_auth_mode,
+        session_token,
+    )
+    app.state.download_executor = NoopDownloadExecutor()
     app.state.plan_cache = ResourcePlanCache(
         ttl_seconds=settings.plan_cache_ttl_seconds,
         max_entries=settings.plan_cache_max_entries,
@@ -70,8 +87,25 @@ app.add_middleware(
     allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Zhiqu-Session"],
 )
+
+
+@app.middleware("http")
+async def runtime_client_session_boundary(request: Request, call_next):
+    protected = (
+        request.method != "OPTIONS"
+        and request.url.path.startswith("/v1/")
+        and request.url.path != "/v1/health"
+    )
+    if protected:
+        session = request.app.state.client_session_auth.authenticate(
+            request.headers.get("X-Zhiqu-Session")
+        )
+        if session is None:
+            return JSONResponse(status_code=401, content={"detail": "Runtime session required"})
+        request.state.zhiqu_session = session
+    return await call_next(request)
 
 
 @app.get("/v1/health", response_model=HealthResponse)
@@ -97,17 +131,26 @@ async def analyze_capture(batch: CaptureBatch, request: Request, refresh: bool =
 
 
 @app.post("/v1/jobs", response_model=ResourceJobSnapshot)
-async def create_resource_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
+async def create_resource_job(payload: ResourceJobCreateRequest, request: Request) -> ResourceJobSnapshot:
     try:
-        return create_job(compile_confirmed_request(payload))
+        compiled = compile_confirmed_request(payload)
+        job = create_job(compiled)
+        await request.app.state.download_executor.create(
+            execution_request_from_resource_job(job, compiled)
+        )
+        return job
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/jobs/manual", response_model=ResourceJobSnapshot)
-async def create_manual_resource_job(payload: ManualJobCreateRequest) -> ResourceJobSnapshot:
+async def create_manual_resource_job(payload: ManualJobCreateRequest, request: Request) -> ResourceJobSnapshot:
     try:
-        return create_manual_job(payload)
+        job = create_manual_job(payload)
+        await request.app.state.download_executor.create(
+            execution_request_from_manual_job(job, payload)
+        )
+        return job
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -126,25 +169,37 @@ async def read_job(job_id: str) -> ResourceJobSnapshot:
 
 
 @app.post("/v1/jobs/{job_id}/pause", response_model=ResourceJobSnapshot)
-async def pause_resource_job(job_id: str) -> ResourceJobSnapshot:
+async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     try:
         job = pause_job(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="ResourceJob not found")
+    await request.app.state.download_executor.pause(job_id)
     return job
 
 
 @app.post("/v1/jobs/{job_id}/resume", response_model=ResourceJobSnapshot)
-async def resume_resource_job(job_id: str) -> ResourceJobSnapshot:
+async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     try:
         job = resume_job(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="ResourceJob not found")
+    await request.app.state.download_executor.resume(job_id)
     return job
+
+
+@app.post("/v1/jobs/{job_id}/cancel", status_code=204)
+async def cancel_resource_job(job_id: str, request: Request) -> Response:
+    if get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="ResourceJob not found")
+    await request.app.state.download_executor.cancel(job_id)
+    if not cancel_job(job_id):
+        raise HTTPException(status_code=404, detail="ResourceJob not found")
+    return Response(status_code=204)
 
 
 @app.get("/v1/link-history", response_model=list[LinkHistoryItem])

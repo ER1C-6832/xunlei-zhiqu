@@ -14,9 +14,17 @@ export function useZhiquCapabilities(): ZhiquCapabilities | null {
 
   useEffect(() => {
     let disposed = false;
-    void zhiquService.getCapabilities()
-      .then((resolved) => {
-        if (!disposed) setCapabilities(resolved);
+    void Promise.all([
+      zhiquService.getCapabilities(),
+      zhiquService.getAnalysisAccess()
+    ])
+      .then(([resolved, access]) => {
+        if (!disposed) {
+          setCapabilities({
+            ...resolved,
+            intelligentAnalysis: resolved.intelligentAnalysis && access.canAnalyze
+          });
+        }
       })
       .catch((error) => {
         console.warn('[迅雷智取] capability resolution failed; using local-only fallback', error);

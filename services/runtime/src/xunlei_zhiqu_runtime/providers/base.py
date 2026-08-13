@@ -37,7 +37,7 @@ class ModelAnalysisResult:
 
 
 class ModelProviderAdapter(ABC):
-    """Model providers only receive a Runtime-built, sanitized EvidencePack."""
+    """Runtime's current ModelGatewayPort: EvidencePack -> validated ResourcePlan."""
 
     name: str
 

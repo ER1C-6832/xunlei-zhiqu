@@ -1,4 +1,6 @@
 import type {
+  AnalysisAccess,
+  AnalysisCredential,
   CaptureBatch,
   LinkFavoriteCreateRequest,
   LinkHistoryItem,
@@ -8,6 +10,10 @@ import type {
   ResourcePlan,
   ZhiquCapabilities
 } from '@xunlei-zhiqu/contracts';
+import {
+  resolveAnalysisAccess,
+  resolveFixtureAnalysisCredential
+} from './analysisCredential';
 import { resolveFixtureZhiquCapabilities } from './capabilityResolver';
 import { LocalHttpTransport } from './transports/localHttpTransport';
 
@@ -17,10 +23,15 @@ export type AnalyzeResourcesOptions = {
   forceRefresh?: boolean;
 };
 
+export type TransportAnalyzeResourcesOptions = AnalyzeResourcesOptions & {
+  analysisCredential: AnalysisCredential;
+};
+
 export type ZhiquCapabilityResolver = () => Promise<ZhiquCapabilities> | ZhiquCapabilities;
+export type AnalysisCredentialResolver = () => Promise<AnalysisCredential | null> | AnalysisCredential | null;
 
 export interface ZhiquServiceTransport {
-  analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions): Promise<ResourcePlan>;
+  analyzeResources(batch: CaptureBatch, options: TransportAnalyzeResourcesOptions): Promise<ResourcePlan>;
   createJob(request: ResourceJobCreateRequest): Promise<ResourceJobSnapshot>;
   createManualJob(request: ManualJobCreateRequest): Promise<ResourceJobSnapshot>;
   favoriteResource(request: LinkFavoriteCreateRequest): Promise<LinkHistoryItem>;
@@ -29,6 +40,7 @@ export interface ZhiquServiceTransport {
 
 export interface ZhiquServiceClient {
   getCapabilities(): Promise<ZhiquCapabilities>;
+  getAnalysisAccess(): Promise<AnalysisAccess>;
   analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions): Promise<ResourcePlan>;
   createJob(request: ResourceJobCreateRequest): Promise<ResourceJobSnapshot>;
   createManualJob(request: ManualJobCreateRequest): Promise<ResourceJobSnapshot>;
@@ -39,15 +51,31 @@ export interface ZhiquServiceClient {
 export class DefaultZhiquServiceClient implements ZhiquServiceClient {
   constructor(
     private readonly transport: ZhiquServiceTransport,
-    private readonly capabilityResolver: ZhiquCapabilityResolver = resolveFixtureZhiquCapabilities
+    private readonly capabilityResolver: ZhiquCapabilityResolver = resolveFixtureZhiquCapabilities,
+    private readonly credentialResolver: AnalysisCredentialResolver = resolveFixtureAnalysisCredential
   ) {}
 
   async getCapabilities(): Promise<ZhiquCapabilities> {
     return this.capabilityResolver();
   }
 
-  analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions) {
-    return this.transport.analyzeResources(batch, options);
+  async getAnalysisAccess(): Promise<AnalysisAccess> {
+    const [capabilities, credential] = await Promise.all([
+      this.capabilityResolver(),
+      this.credentialResolver()
+    ]);
+    return resolveAnalysisAccess(capabilities, credential);
+  }
+
+  async analyzeResources(batch: CaptureBatch, options?: AnalyzeResourcesOptions): Promise<ResourcePlan> {
+    const access = await this.getAnalysisAccess();
+    if (!access.canAnalyze || !access.analysisCredential) {
+      throw new Error('当前没有可用的智能分析凭据。');
+    }
+    return this.transport.analyzeResources(batch, {
+      ...options,
+      analysisCredential: access.analysisCredential
+    });
   }
 
   createJob(request: ResourceJobCreateRequest) {
