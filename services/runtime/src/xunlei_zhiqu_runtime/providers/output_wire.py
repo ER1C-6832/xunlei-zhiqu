@@ -53,7 +53,7 @@ WIRE2_OUTPUT_CONTRACT = {
     "omit": "empty top-level groups and empty ta/er may be omitted",
 }
 
-WIRE2_SYSTEM_SUFFIX = """\n\nWIRE2 输出协议：最终 JSON 只使用 output_contract 中的短键，不要输出完整字段名。s/a/x/u 是 item 对象数组，r 是 rec 对象数组；空组和空 ta/er 可省略。语义、候选引用和推荐约束与上文完全相同。"""
+WIRE2_SYSTEM_SUFFIX = """\n\nWIRE2 输出协议：最终 JSON 只使用 output_contract 中的短键，不要输出完整字段名。rt/n/o 是必填顶层字段；s/a/x/u 是 item 对象数组，r 是 rec 对象数组；空组和空 ta/er 可省略。语义、候选引用和推荐约束与上文完全相同。"""
 
 
 def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
@@ -65,8 +65,9 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
     the compact contract.
 
     `role` is deterministic from the decision bucket and is therefore filled by
-    Runtime when omitted. A provider should not fail merely because a model did
-    not repeat information Runtime already owns.
+    Runtime when omitted. `resource_title` is presentation metadata: when a model
+    omits it, Runtime derives a conservative fallback from a returned item label
+    instead of rejecting an otherwise grounded plan.
     """
     raw_chars = _serialized_chars(parsed)
     expanded_keys = 0
@@ -85,6 +86,12 @@ def expand_compact_resource_plan(parsed: dict[str, object]) -> int:
             for item in group:
                 if isinstance(item, dict):
                     expanded_keys += _expand_item(item, group_name)
+
+    if not _non_empty_string(parsed.get("resource_title")):
+        derived_title = _derive_resource_title(parsed)
+        if derived_title:
+            parsed["resource_title"] = derived_title
+            expanded_keys += 1
 
     recommendations = parsed.get("recommendations")
     if isinstance(recommendations, dict):
@@ -123,7 +130,7 @@ def _expand_item(item: dict[str, object], group_name: str) -> int:
             expanded += 1
         item.pop(short_key, None)
 
-    if not isinstance(item.get("role"), str) or not str(item.get("role") or "").strip():
+    if not _non_empty_string(item.get("role")):
         item["role"] = ROLE_BY_GROUP[group_name]
         expanded += 1
     return expanded
@@ -137,6 +144,28 @@ def _expand_recommendation(recommendation: dict[str, object]) -> int:
             expanded += 1
         recommendation.pop(short_key, None)
     return expanded
+
+
+def _derive_resource_title(parsed: dict[str, object]) -> str | None:
+    for alias in ("title", "name", "resource_name"):
+        value = parsed.get(alias)
+        if _non_empty_string(value):
+            return str(value).strip()[:180]
+
+    for group_name in ("selected", "alternatives", "uncertainties", "excluded"):
+        group = parsed.get(group_name)
+        items = [group] if isinstance(group, dict) else group if isinstance(group, list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("label")
+            if _non_empty_string(label):
+                return str(label).strip()[:180]
+    return None
+
+
+def _non_empty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _serialized_chars(value: object) -> int:
