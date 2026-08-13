@@ -63,6 +63,34 @@ _FAST_OUTPUT_CONTRACT = {
     },
 }
 
+# Compact v1 isolates prompt-size optimization from evidence reduction and output budget.
+# It uses the exact same EvidencePack and 1536-token ceiling as fast-v2, but removes
+# repeated prose and keeps only the correctness constraints needed by deterministic validation.
+_COMPACT_SYSTEM_PROMPT = """你是“迅雷智取”节点A。仅据 EvidencePack 输出简洁 ResourcePlan；不猜意图，不编造事实或 ID。
+硬约束：
+1. 只能引用已有 candidate id；每个 PlanItem 至少 1 个 candidate_id。
+2. 若有匹配 device.os/device.arch 的主资源，selected 必须含匹配项；不能只选其他系统、源码或验证附件。
+3. 签名/checksum/GPG/SBOM/Sigstore 是附件；有主资源时不得作为唯一 selected。当前设备有可用安装包/压缩包时，源码放 alternatives。
+4. resource_family_hint 仅是提示，ambiguous=true 时结合文件名、上下文、MIME、metadata。
+5. selected 通常 1 项最多 2；alternatives 最多 3 组；excluded/uncertainties/recommendations 各最多 1。相同用途用 candidate_ids 聚合。
+6. 文字短：overview 1~2句；说明只写“是什么/适合谁”；reason 只写关键依据；避免重复设备、版本、文件名。泛化不确定性写 overview。
+7. technical_attributes 为 JSON object；candidate_ids/evidence_refs/item_ids 为数组。只输出 JSON。
+resource_type: software|document|video|audio|image|subtitle|model|design|archive|disk_image|mixed|unknown。
+role: primary|attachment|alternative|excluded|unknown。scenario: current_device|compatibility|quality|small_size|manual。"""
+
+_COMPACT_OUTPUT_CONTRACT = {
+    "resource_type": "enum",
+    "resource_title": "s",
+    "overview": "s",
+    "selected": "items",
+    "alternatives": "items",
+    "excluded": "items",
+    "uncertainties": "items",
+    "recommendations": "recs",
+    "item_fields": "item_id,candidate_ids,label,plain_explanation,reason,role,technical_attributes,evidence_refs",
+    "rec_fields": "scenario,item_ids,summary",
+}
+
 
 def create_provider(settings: Settings) -> ModelProviderAdapter:
     if settings.model_provider == "fixture":
@@ -73,12 +101,17 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
         return FixtureProvider()
     if settings.model_provider == "openai_compatible":
         key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
-        fast_profile = settings.node_a_profile == "fast"
 
-        if fast_profile:
+        if settings.node_a_profile == "fast":
             openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
             openai_compatible.OUTPUT_CONTRACT = _FAST_OUTPUT_CONTRACT
             openai_compatible.PROMPT_VERSION = "stage-d6-fast-v2"
+            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        elif settings.node_a_profile == "compact":
+            openai_compatible.SYSTEM_PROMPT = _COMPACT_SYSTEM_PROMPT
+            openai_compatible.OUTPUT_CONTRACT = _COMPACT_OUTPUT_CONTRACT
+            openai_compatible.PROMPT_VERSION = "stage-d6-compact-v1"
+            # Same ceiling as fast-v2 so this A/B isolates prompt-size changes.
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
         else:
             # Preserve the proven quality baseline byte-for-byte.
