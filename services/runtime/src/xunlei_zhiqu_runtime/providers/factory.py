@@ -127,6 +127,7 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
     if settings.model_provider == "openai_compatible":
         key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
         use_wire = False
+        provider_model = settings.model_name
         # create_provider can be called repeatedly in tests/reload paths; always
         # restore the normal full-key normalizer before selecting an A/B profile.
         openai_compatible._normalize_model_resource_plan = _BASE_NORMALIZER
@@ -144,21 +145,27 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
             use_wire = True
         elif settings.node_a_profile == "wire2":
-            # Continue A/B from wire-v1: keep the same evidence compaction and
-            # correctness prompt, but ask the model to emit short transport keys.
-            # Runtime expands them back to the canonical ResourcePlan before the
-            # existing normalizer, Pydantic validation and deterministic checks.
+            # Proven cost/speed baseline: wire-v1 evidence + short ResourcePlan keys.
             openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE2_SYSTEM_SUFFIX}"
             openai_compatible.OUTPUT_CONTRACT = WIRE2_OUTPUT_CONTRACT
             openai_compatible.PROMPT_VERSION = "stage-d6-wire2-v1"
             openai_compatible._normalize_model_resource_plan = _wire2_normalizer
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
             use_wire = True
+        elif settings.node_a_profile == "latency":
+            # Latency A/B: freeze the proven wire2 evidence/output protocol and
+            # deterministic guards, changing only the model. The default
+            # qwen-flash model uses the same Beijing OpenAI-compatible endpoint
+            # and JSON mode, so this isolates model/service decode latency.
+            openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE2_SYSTEM_SUFFIX}"
+            openai_compatible.OUTPUT_CONTRACT = WIRE2_OUTPUT_CONTRACT
+            openai_compatible.PROMPT_VERSION = "stage-d6-latency-wire2-v1"
+            openai_compatible._normalize_model_resource_plan = _wire2_normalizer
+            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+            provider_model = settings.node_a_latency_model.strip() or settings.model_name
+            use_wire = True
         elif settings.node_a_profile == "wire3":
-            # Cost-first A/B from wire2: keep identical evidence compaction and
-            # correctness rules, but remove repeated item keys from model output
-            # using a positional-array transport. Runtime expands it before all
-            # existing validation and deterministic quality guards.
+            # Failed/experimental lineage retained for reproducibility only.
             openai_compatible.SYSTEM_PROMPT = f"{_FAST_SYSTEM_PROMPT}{WIRE3_SYSTEM_SUFFIX}"
             openai_compatible.OUTPUT_CONTRACT = WIRE3_OUTPUT_CONTRACT
             openai_compatible.PROMPT_VERSION = "stage-d6-wire3-v1"
@@ -178,15 +185,16 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             max_completion_tokens = settings.model_max_completion_tokens
 
         logger.info(
-            "node_a_profile profile=%s prompt_version=%s max_completion_tokens=%d",
+            "node_a_profile profile=%s prompt_version=%s model=%s max_completion_tokens=%d",
             settings.node_a_profile,
             openai_compatible.PROMPT_VERSION,
+            provider_model,
             max_completion_tokens,
         )
         provider: ModelProviderAdapter = OpenAICompatibleProvider(
             base_url=settings.model_base_url,
             api_key=key,
-            model=settings.model_name,
+            model=provider_model,
             connect_timeout_seconds=settings.model_connect_timeout_seconds,
             read_timeout_seconds=settings.model_read_timeout_seconds,
             write_timeout_seconds=settings.model_write_timeout_seconds,
