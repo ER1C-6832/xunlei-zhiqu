@@ -17,8 +17,7 @@ class Settings(BaseSettings):
     model_write_timeout_seconds: float = 30.0
     # Stage D6 A/B profiles. wire2 is the proven cost/speed baseline. pipeline
     # continues from wire2 by optimizing only Runtime-owned transport. latency is
-    # retained only for model-only comparison; failed compact/wire3 experiments
-    # were removed rather than kept as production configuration surface.
+    # retained only for isolated model comparison.
     model_max_completion_tokens: int = 4096
     node_a_profile: Literal[
         "quality",
