@@ -89,7 +89,7 @@ export interface PlanItem {
   plain_explanation: string;
   reason: string;
   role: 'primary' | 'attachment' | 'alternative' | 'excluded' | 'unknown';
-  technical_attributes?: Record<string, string | number | boolean | null>;
+  technical_attributes?: Record<string, unknown>;
   evidence_refs?: string[];
 }
 
@@ -149,13 +149,13 @@ export interface ResourceJobSnapshot {
   excluded_count: number;
   created_at: string;
   destination?: string | null;
-  delivery_target?: DeliveryTarget;
+  delivery_target: DeliveryTarget;
   plan_id?: string | null;
-  execution_mode?: 'demo' | 'download_engine';
-  resource_type?: ResourceType;
+  execution_mode: 'demo' | 'download_engine';
+  resource_type: ResourceType;
   plan_overview?: string | null;
-  selected_items?: string[];
-  alternative_count?: number;
+  selected_items: string[];
+  alternative_count: number;
   source_page?: string | null;
 }
 
@@ -171,16 +171,6 @@ export interface LinkHistoryItem {
   status: 'active' | 'completed' | 'failed' | 'saved';
   source_page?: string | null;
   resource_type?: ResourceType | null;
-  favorite?: boolean;
-  favorite_at?: string | null;
-}
-
-export interface LinkFavoriteCreateRequest {
-  schema_version: '0.1';
-  plan: ResourcePlan;
-  capture?: CaptureBatch | null;
-}
-
-export interface LinkFavoriteUpdateRequest {
   favorite: boolean;
+  favorite_at?: string | null;
 }
