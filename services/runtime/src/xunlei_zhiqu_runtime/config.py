@@ -15,10 +15,12 @@ class Settings(BaseSettings):
     model_connect_timeout_seconds: float = 10.0
     model_read_timeout_seconds: float = 120.0
     model_write_timeout_seconds: float = 30.0
-    # Stage D6 quality baseline. Fast is the proven latency profile; compact is
-    # retained for reproducible A/B history; wire tests evidence transport only.
+    # Stage D6 A/B profiles: quality is the correctness baseline; fast is the
+    # latency baseline; wire is the input-cost baseline; wire2 continues from
+    # wire with compact ResourcePlan transport keys. compact is retained only
+    # to reproduce the failed compact-v1 experiment.
     model_max_completion_tokens: int = 4096
-    node_a_profile: Literal["quality", "fast", "compact", "wire"] = "quality"
+    node_a_profile: Literal["quality", "fast", "compact", "wire", "wire2"] = "quality"
     plan_cache_ttl_seconds: float = 1200.0
     plan_cache_max_entries: int = 64
     runtime_host: str = "127.0.0.1"
