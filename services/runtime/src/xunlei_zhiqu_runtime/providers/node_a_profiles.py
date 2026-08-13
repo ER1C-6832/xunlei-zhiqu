@@ -179,9 +179,13 @@ def build_node_a_profile(*, profile: str, max_completion_tokens: int) -> NodeAPr
         )
         return NodeAProfileSpec(
             name=profile,
-            system_prompt=f"{_FAST_SYSTEM_PROMPT}{PIPELINE_V3_SYSTEM_SUFFIX}\noutput_contract={compact_contract}",
+            system_prompt=(
+                f"{_FAST_SYSTEM_PROMPT}{PIPELINE_V3_SYSTEM_SUFFIX}\n"
+                "图片资源若有明确 possible_original=true 的候选，应优先原图；只有原图不可用或证据不充分时才默认 preview/thumbnail。\n"
+                f"output_contract={compact_contract}"
+            ),
             output_contract=PIPELINE_V3_OUTPUT_CONTRACT,
-            prompt_version="stage-e0-pipeline-v3-v1",
+            prompt_version="stage-e0-pipeline-v3-v2",
             normalizer=_pipeline_v3_normalizer,
             request_builder=build_pipeline_v3_request,
             max_completion_tokens=bounded_tokens,
