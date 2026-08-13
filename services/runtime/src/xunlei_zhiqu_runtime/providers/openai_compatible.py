@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from collections.abc import Callable
 import json
 import logging
 import time
@@ -21,6 +24,12 @@ logger = logging.getLogger("uvicorn.error")
 PROMPT_VERSION = "stage-d6-v2"
 PLAN_ITEM_GROUPS = ("selected", "alternatives", "excluded", "uncertainties")
 RECOMMENDATION_SCENARIOS = {"current_device", "compatibility", "quality", "small_size", "manual"}
+_ROLE_BY_GROUP = {
+    "selected": "primary",
+    "alternatives": "alternative",
+    "excluded": "excluded",
+    "uncertainties": "unknown",
+}
 
 SYSTEM_PROMPT = """你是“迅雷智取”的节点 A：资源理解与选型节点。目标不是逐文件写报告，而是把几十个技术候选压缩成普通用户能快速选择的少量资源组。
 
@@ -84,6 +93,9 @@ OUTPUT_CONTRACT = {
     },
 }
 
+RequestBuilder = Callable[[EvidencePack], object]
+PlanNormalizer = Callable[[dict[str, object]], dict[str, int]]
+
 
 class OpenAICompatibleProvider(ModelProviderAdapter):
     name = "openai_compatible"
@@ -98,16 +110,30 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         read_timeout_seconds: float,
         write_timeout_seconds: float,
         max_completion_tokens: int,
+        system_prompt: str | None = None,
+        output_contract: dict[str, object] | None = None,
+        prompt_version: str | None = None,
+        normalizer: PlanNormalizer | None = None,
+        request_builder: RequestBuilder | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("MODEL_API_KEY is required for openai_compatible provider")
         self._model = model
         self._read_timeout_seconds = read_timeout_seconds
         self._max_completion_tokens = max_completion_tokens
+        self._system_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
+        self._output_contract = output_contract if output_contract is not None else OUTPUT_CONTRACT
+        self._prompt_version = prompt_version or PROMPT_VERSION
+        self._normalizer = normalizer or _normalize_model_resource_plan
+        self._request_builder = request_builder
         self._dashscope_deepseek_v4 = (
             "aliyuncs.com" in base_url.lower()
             and model.lower().startswith("deepseek-v4")
         )
+        # httpx already pools connections, but its default keep-alive expiry is
+        # short for an interactive agent where users often wait >5s between
+        # analyses. Keep a small pool warm so repeat analyses avoid needless
+        # TCP/TLS setup without opening many idle sockets.
         self._client = httpx.AsyncClient(
             base_url=f"{base_url.rstrip('/')}/",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -117,6 +143,11 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 write=write_timeout_seconds,
                 pool=10.0,
             ),
+            limits=httpx.Limits(
+                max_connections=8,
+                max_keepalive_connections=4,
+                keepalive_expiry=120.0,
+            ),
         )
 
     @property
@@ -125,22 +156,26 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
 
     @property
     def cache_namespace(self) -> str:
-        return f"{self.name}:{self._model}:{PROMPT_VERSION}:max{self._max_completion_tokens}"
+        return f"{self.name}:{self._model}:{self._prompt_version}:max{self._max_completion_tokens}"
 
     async def analyze(self, evidence_pack: EvidencePack) -> ResourcePlan:
         return (await self.analyze_with_metrics(evidence_pack)).plan
 
     async def analyze_with_metrics(self, evidence_pack: EvidencePack) -> ModelAnalysisResult:
         started = time.perf_counter()
-        request_document = {
-            "task": "把这批候选整理成少量用户可选择的资源组，优先给出与当前设备兼容的主资源，解释关键差异并给出可修改推荐。",
-            "evidence_pack": evidence_pack.model_dump(
-                mode="json",
-                exclude_none=True,
-                exclude_defaults=True,
-            ),
-            "output_contract": OUTPUT_CONTRACT,
-        }
+        build_started = started
+        if self._request_builder is not None:
+            request_document = self._request_builder(evidence_pack)
+        else:
+            request_document = {
+                "task": "把这批候选整理成少量用户可选择的资源组，优先给出与当前设备兼容的主资源，解释关键差异并给出可修改推荐。",
+                "evidence_pack": evidence_pack.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                ),
+                "output_contract": self._output_contract,
+            }
         user_content = json.dumps(
             request_document,
             ensure_ascii=False,
@@ -152,23 +187,26 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             "max_completion_tokens": self._max_completion_tokens,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": user_content},
             ],
         }
         if self._dashscope_deepseek_v4:
             payload["enable_thinking"] = False
+        build_ms = _elapsed_ms(build_started)
 
         logger.info(
-            "node_a_request model=%s ai_evidence_count=%d prompt_chars=%d max_completion_tokens=%d "
+            "node_a_request model=%s prompt_version=%s ai_evidence_count=%d prompt_chars=%d max_completion_tokens=%d "
             "dashscope_non_thinking_json=%s",
             self._model,
+            self._prompt_version,
             len(evidence_pack.candidates),
             len(user_content),
             self._max_completion_tokens,
             self._dashscope_deepseek_v4,
         )
 
+        http_started = time.perf_counter()
         try:
             response = await self._client.post("chat/completions", json=payload)
         except httpx.ReadTimeout as exc:
@@ -183,6 +221,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             raise ModelProviderRequestError(
                 f"无法完成模型服务请求：{exc.__class__.__name__}。请检查 MODEL_BASE_URL、网络和系统代理。"
             ) from exc
+        http_ms = _elapsed_ms(http_started)
 
         try:
             response.raise_for_status()
@@ -194,10 +233,12 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 "请检查模型名、API Key、额度或兼容接口配置。"
             ) from exc
 
+        response_json_started = time.perf_counter()
         try:
             body = response.json()
         except ValueError as exc:
             raise ModelProviderResponseError("模型服务返回了成功 HTTP 状态，但响应体不是 JSON。") from exc
+        response_json_ms = _elapsed_ms(response_json_started)
 
         try:
             choice = body["choices"][0]
@@ -230,6 +271,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 hint or "模型返回了空的最终 content，无法生成 ResourcePlan。"
             )
 
+        output_json_started = time.perf_counter()
         try:
             parsed = json.loads(self._strip_fences(content))
         except json.JSONDecodeError as exc:
@@ -237,16 +279,19 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 f"模型最终 content 不是合法 JSON（finish_reason={finish_reason or 'unknown'}，"
                 f"content_chars={content_chars}）。"
             ) from exc
+        output_json_ms = _elapsed_ms(output_json_started)
 
         if not isinstance(parsed, dict):
             raise ModelProviderResponseError("模型 JSON 顶层必须是对象，不能是数组或纯文本。")
 
-        normalization = _normalize_model_resource_plan(parsed)
+        normalize_started = time.perf_counter()
+        normalization = self._normalizer(parsed)
+        normalize_ms = _elapsed_ms(normalize_started)
         if any(normalization.values()):
             logger.info(
                 "node_a_normalized_output wrapped_groups=%d empty_groups=%d normalized_attributes=%d "
                 "scalar_candidate_ids=%d cleaned_candidate_ids=%d dropped_unanchored_items=%d "
-                "normalized_evidence_refs=%d dropped_empty_recommendations=%d "
+                "normalized_evidence_refs=%d derived_roles=%d dropped_empty_recommendations=%d "
                 "dropped_invalid_recommendations=%d normalized_recommendation_item_ids=%d "
                 "removed_dropped_item_references=%d",
                 normalization["wrapped_groups"],
@@ -256,6 +301,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 normalization["cleaned_candidate_ids"],
                 normalization["dropped_unanchored_items"],
                 normalization["normalized_evidence_refs"],
+                normalization["derived_roles"],
                 normalization["dropped_empty_recommendations"],
                 normalization["dropped_invalid_recommendations"],
                 normalization["normalized_recommendation_item_ids"],
@@ -266,6 +312,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         parsed["batch_id"] = evidence_pack.batch_id
         parsed["provider"] = self.name
         parsed.setdefault("plan_id", f"plan_{uuid4().hex[:12]}")
+        validate_started = time.perf_counter()
         try:
             plan = ResourcePlan.model_validate(parsed)
         except ValidationError as exc:
@@ -278,6 +325,19 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
             raise ModelProviderResponseError(
                 f"模型返回了 JSON，但不符合 ResourcePlan：{summary}"
             ) from exc
+        validate_ms = _elapsed_ms(validate_started)
+
+        logger.info(
+            "node_a_provider_timing build_ms=%d http_ms=%d response_json_ms=%d output_json_ms=%d "
+            "normalize_ms=%d validate_ms=%d total_ms=%d",
+            build_ms,
+            http_ms,
+            response_json_ms,
+            output_json_ms,
+            normalize_ms,
+            validate_ms,
+            _elapsed_ms(started),
+        )
 
         input_tokens, output_tokens, cached_tokens = _usage_metrics(body)
         return ModelAnalysisResult(
@@ -287,7 +347,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cached_tokens=cached_tokens,
-                latency_ms=int((time.perf_counter() - started) * 1000),
+                latency_ms=_elapsed_ms(started),
             ),
         )
 
@@ -339,6 +399,9 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
     Candidate-less PlanItems are dropped because they cannot be grounded, located,
     selected, or executed. Unknown string candidate IDs are intentionally preserved
     so the deterministic analyzer can still reject hallucinated references.
+
+    The containing decision bucket owns `role`; when a model omits that redundant
+    field Runtime derives it instead of failing an otherwise valid plan.
     """
     stats = {
         "wrapped_groups": 0,
@@ -348,6 +411,7 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
         "cleaned_candidate_ids": 0,
         "dropped_unanchored_items": 0,
         "normalized_evidence_refs": 0,
+        "derived_roles": 0,
         "dropped_empty_recommendations": 0,
         "dropped_invalid_recommendations": 0,
         "normalized_recommendation_item_ids": 0,
@@ -373,6 +437,11 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
             if not isinstance(item, dict):
                 normalized_items.append(item)
                 continue
+
+            role = item.get("role")
+            if not isinstance(role, str) or not role.strip():
+                item["role"] = _ROLE_BY_GROUP[group_name]
+                stats["derived_roles"] += 1
 
             attributes = item.get("technical_attributes")
             if not isinstance(attributes, dict):
@@ -506,3 +575,7 @@ def _provider_error_detail(response: httpx.Response) -> str | None:
     if isinstance(body.get("message"), str):
         return body["message"][:300]
     return None
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
