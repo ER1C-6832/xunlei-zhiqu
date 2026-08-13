@@ -1,8 +1,8 @@
-import type { CaptureBatch, ManualJobCreateRequest, ResourceJobSnapshot } from '@xunlei-zhiqu/contracts';
+import type { CaptureBatch, ManualJobCreateRequest } from '@xunlei-zhiqu/contracts';
 import { ArrowLeft, Check, Images, LoaderCircle, RefreshCw, Send } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { zhiquService } from './services/zhiquServiceClient';
 
-const RUNTIME_URL = 'http://127.0.0.1:8765';
 type ImageFilter = 'all' | 'large' | 'original';
 type ImageCandidate = CaptureBatch['candidates'][number];
 
@@ -83,14 +83,8 @@ export function BatchImagePanel() {
         title: `批量图片（${links.length} 张）`,
         delivery_target: 'local'
       };
-      const response = await fetch(`${RUNTIME_URL}/v1/jobs/manual`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) throw new Error(`创建任务失败：HTTP ${response.status}`);
-      await response.json() as ResourceJobSnapshot;
-      void chrome.tabs.create({ url: `${RUNTIME_URL}/app/#/downloads` });
+      await zhiquService.createManualJob(payload);
+      await zhiquService.openTaskCenter('downloads');
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : '创建批量图片任务失败');
     } finally {
