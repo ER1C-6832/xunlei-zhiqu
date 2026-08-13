@@ -209,12 +209,14 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
         normalization = _normalize_model_resource_plan(parsed)
         if any(normalization.values()):
             logger.info(
-                "node_a_normalized_output empty_groups=%d empty_attributes=%d scalar_candidate_ids=%d "
-                "cleaned_candidate_ids=%d dropped_unanchored_items=%d normalized_evidence_refs=%d "
-                "dropped_empty_recommendations=%d dropped_invalid_recommendations=%d "
-                "normalized_recommendation_item_ids=%d",
+                "node_a_normalized_output wrapped_groups=%d empty_groups=%d normalized_attributes=%d "
+                "scalar_candidate_ids=%d cleaned_candidate_ids=%d dropped_unanchored_items=%d "
+                "normalized_evidence_refs=%d dropped_empty_recommendations=%d "
+                "dropped_invalid_recommendations=%d normalized_recommendation_item_ids=%d "
+                "removed_dropped_item_references=%d",
+                normalization["wrapped_groups"],
                 normalization["empty_groups"],
-                normalization["empty_attributes"],
+                normalization["normalized_attributes"],
                 normalization["scalar_candidate_ids"],
                 normalization["cleaned_candidate_ids"],
                 normalization["dropped_unanchored_items"],
@@ -222,6 +224,7 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
                 normalization["dropped_empty_recommendations"],
                 normalization["dropped_invalid_recommendations"],
                 normalization["normalized_recommendation_item_ids"],
+                normalization["removed_dropped_item_references"],
             )
 
         parsed["schema_version"] = "0.1"
@@ -255,15 +258,16 @@ class OpenAICompatibleProvider(ModelProviderAdapter):
 
 
 def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
-    """Normalize only semantically equivalent model shape variants.
+    """Normalize semantically equivalent model shape variants.
 
     Candidate-less PlanItems are dropped because they cannot be grounded, located,
     selected, or executed. Unknown string candidate IDs are intentionally preserved
     so the deterministic analyzer can still reject hallucinated references.
     """
     stats = {
+        "wrapped_groups": 0,
         "empty_groups": 0,
-        "empty_attributes": 0,
+        "normalized_attributes": 0,
         "scalar_candidate_ids": 0,
         "cleaned_candidate_ids": 0,
         "dropped_unanchored_items": 0,
@@ -271,7 +275,9 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
         "dropped_empty_recommendations": 0,
         "dropped_invalid_recommendations": 0,
         "normalized_recommendation_item_ids": 0,
+        "removed_dropped_item_references": 0,
     }
+    dropped_item_ids: set[str] = set()
 
     for group_name in PLAN_ITEM_GROUPS:
         items = parsed.get(group_name)
@@ -279,6 +285,10 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
             parsed[group_name] = []
             stats["empty_groups"] += 1
             continue
+        if isinstance(items, dict):
+            items = [items]
+            parsed[group_name] = items
+            stats["wrapped_groups"] += 1
         if not isinstance(items, list):
             continue
 
@@ -289,9 +299,9 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
                 continue
 
             attributes = item.get("technical_attributes")
-            if attributes is None or attributes == []:
+            if not isinstance(attributes, dict):
                 item["technical_attributes"] = {}
-                stats["empty_attributes"] += 1
+                stats["normalized_attributes"] += 1
 
             candidate_ids = item.get("candidate_ids")
             if isinstance(candidate_ids, str):
@@ -305,14 +315,14 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
                 stats["cleaned_candidate_ids"] += removed
 
             if isinstance(item.get("candidate_ids"), list) and not item["candidate_ids"]:
+                item_id = item.get("item_id")
+                if isinstance(item_id, str) and item_id.strip():
+                    dropped_item_ids.add(item_id.strip())
                 stats["dropped_unanchored_items"] += 1
                 continue
 
             evidence_refs = item.get("evidence_refs")
-            if evidence_refs is None:
-                item["evidence_refs"] = []
-                stats["normalized_evidence_refs"] += 1
-            elif isinstance(evidence_refs, str):
+            if isinstance(evidence_refs, str):
                 item["evidence_refs"] = [evidence_refs.strip()] if evidence_refs.strip() else []
                 stats["normalized_evidence_refs"] += 1
             elif isinstance(evidence_refs, list):
@@ -320,6 +330,11 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
                 if removed or normalized_refs != evidence_refs:
                     item["evidence_refs"] = normalized_refs
                     stats["normalized_evidence_refs"] += 1
+            elif evidence_refs is not None:
+                item["evidence_refs"] = []
+                stats["normalized_evidence_refs"] += 1
+            else:
+                item["evidence_refs"] = []
 
             normalized_items.append(item)
         parsed[group_name] = normalized_items
@@ -328,37 +343,46 @@ def _normalize_model_resource_plan(parsed: dict[str, object]) -> dict[str, int]:
     if recommendations is None:
         parsed["recommendations"] = []
         stats["empty_groups"] += 1
-    elif isinstance(recommendations, list):
-        normalized_recommendations: list[object] = []
-        for recommendation in recommendations:
-            if not isinstance(recommendation, dict):
-                stats["dropped_invalid_recommendations"] += 1
-                continue
+    else:
+        if isinstance(recommendations, dict):
+            recommendations = [recommendations]
+            parsed["recommendations"] = recommendations
+            stats["wrapped_groups"] += 1
+        if isinstance(recommendations, list):
+            normalized_recommendations: list[object] = []
+            for recommendation in recommendations:
+                if not isinstance(recommendation, dict):
+                    stats["dropped_invalid_recommendations"] += 1
+                    continue
 
-            scenario = recommendation.get("scenario")
-            summary = recommendation.get("summary")
-            if scenario not in RECOMMENDATION_SCENARIOS or not isinstance(summary, str) or not summary.strip():
-                stats["dropped_invalid_recommendations"] += 1
-                continue
+                scenario = recommendation.get("scenario")
+                summary = recommendation.get("summary")
+                if scenario not in RECOMMENDATION_SCENARIOS or not isinstance(summary, str) or not summary.strip():
+                    stats["dropped_invalid_recommendations"] += 1
+                    continue
 
-            item_ids = recommendation.get("item_ids")
-            if isinstance(item_ids, str):
-                recommendation["item_ids"] = [item_ids.strip()] if item_ids.strip() else []
-                stats["normalized_recommendation_item_ids"] += 1
-            elif item_ids is None:
-                recommendation["item_ids"] = []
-                stats["normalized_recommendation_item_ids"] += 1
-            elif isinstance(item_ids, list):
-                normalized_item_ids, removed = _normalize_string_list(item_ids)
-                if removed or normalized_item_ids != item_ids:
-                    recommendation["item_ids"] = normalized_item_ids
+                item_ids = recommendation.get("item_ids")
+                if isinstance(item_ids, str):
+                    normalized_item_ids = [item_ids.strip()] if item_ids.strip() else []
+                    stats["normalized_recommendation_item_ids"] += 1
+                elif isinstance(item_ids, list):
+                    normalized_item_ids, removed = _normalize_string_list(item_ids)
+                    stats["normalized_recommendation_item_ids"] += int(removed > 0 or normalized_item_ids != item_ids)
+                else:
+                    normalized_item_ids = []
                     stats["normalized_recommendation_item_ids"] += 1
 
-            if isinstance(recommendation.get("item_ids"), list) and not recommendation["item_ids"]:
-                stats["dropped_empty_recommendations"] += 1
-                continue
-            normalized_recommendations.append(recommendation)
-        parsed["recommendations"] = normalized_recommendations
+                if dropped_item_ids:
+                    filtered_item_ids = [item_id for item_id in normalized_item_ids if item_id not in dropped_item_ids]
+                    stats["removed_dropped_item_references"] += len(normalized_item_ids) - len(filtered_item_ids)
+                    normalized_item_ids = filtered_item_ids
+                recommendation["item_ids"] = normalized_item_ids
+
+                if not normalized_item_ids:
+                    stats["dropped_empty_recommendations"] += 1
+                    continue
+                normalized_recommendations.append(recommendation)
+            parsed["recommendations"] = normalized_recommendations
 
     return stats
 
