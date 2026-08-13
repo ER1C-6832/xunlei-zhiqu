@@ -3,6 +3,7 @@ import logging
 from xunlei_zhiqu_runtime.config import Settings
 from xunlei_zhiqu_runtime.providers import openai_compatible
 from xunlei_zhiqu_runtime.providers.base import ModelProviderAdapter
+from xunlei_zhiqu_runtime.providers.evidence_wire import EvidenceWireProvider
 from xunlei_zhiqu_runtime.providers.fixture import FixtureProvider
 from xunlei_zhiqu_runtime.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -63,9 +64,9 @@ _FAST_OUTPUT_CONTRACT = {
     },
 }
 
-# Compact v1 isolates prompt-size optimization from evidence reduction and output budget.
-# It uses the exact same EvidencePack and 1536-token ceiling as fast-v2, but removes
-# repeated prose and keeps only the correctness constraints needed by deterministic validation.
+# Compact v1 is retained only so prior A/B results remain reproducible. It reduced
+# input slightly but produced longer output on the Oracle baseline, so it is not
+# the recommended low-latency profile.
 _COMPACT_SYSTEM_PROMPT = """你是“迅雷智取”节点A。仅据 EvidencePack 输出简洁 ResourcePlan；不猜意图，不编造事实或 ID。
 硬约束：
 1. 只能引用已有 candidate id；每个 PlanItem 至少 1 个 candidate_id。
@@ -101,17 +102,25 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
         return FixtureProvider()
     if settings.model_provider == "openai_compatible":
         key = settings.model_api_key.get_secret_value() if settings.model_api_key else ""
+        use_wire = False
 
         if settings.node_a_profile == "fast":
             openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
             openai_compatible.OUTPUT_CONTRACT = _FAST_OUTPUT_CONTRACT
             openai_compatible.PROMPT_VERSION = "stage-d6-fast-v2"
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+        elif settings.node_a_profile == "wire":
+            # Same prompt, output contract, evidence groups and output ceiling as
+            # fast-v2. Only the model-facing EvidencePack transport is compacted.
+            openai_compatible.SYSTEM_PROMPT = _FAST_SYSTEM_PROMPT
+            openai_compatible.OUTPUT_CONTRACT = _FAST_OUTPUT_CONTRACT
+            openai_compatible.PROMPT_VERSION = "stage-d6-wire-v1"
+            max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
+            use_wire = True
         elif settings.node_a_profile == "compact":
             openai_compatible.SYSTEM_PROMPT = _COMPACT_SYSTEM_PROMPT
             openai_compatible.OUTPUT_CONTRACT = _COMPACT_OUTPUT_CONTRACT
             openai_compatible.PROMPT_VERSION = "stage-d6-compact-v1"
-            # Same ceiling as fast-v2 so this A/B isolates prompt-size changes.
             max_completion_tokens = min(settings.model_max_completion_tokens, 1536)
         else:
             # Preserve the proven quality baseline byte-for-byte.
@@ -126,7 +135,7 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             openai_compatible.PROMPT_VERSION,
             max_completion_tokens,
         )
-        return OpenAICompatibleProvider(
+        provider: ModelProviderAdapter = OpenAICompatibleProvider(
             base_url=settings.model_base_url,
             api_key=key,
             model=settings.model_name,
@@ -135,4 +144,5 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
             write_timeout_seconds=settings.model_write_timeout_seconds,
             max_completion_tokens=max_completion_tokens,
         )
+        return EvidenceWireProvider(provider) if use_wire else provider
     raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
