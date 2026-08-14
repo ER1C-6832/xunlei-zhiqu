@@ -6,7 +6,7 @@ from xunlei_zhiqu_runtime.providers.base import ModelProviderAdapter
 from xunlei_zhiqu_runtime.providers.evidence_wire import EvidenceWireProvider
 from xunlei_zhiqu_runtime.providers.fixture import FixtureProvider
 from xunlei_zhiqu_runtime.providers.node_a_profiles import build_node_a_profile
-from xunlei_zhiqu_runtime.providers.structured_chat import StructuredChatProvider
+from xunlei_zhiqu_runtime.providers.runtime_structured import RuntimeStructuredChatProvider
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -42,7 +42,7 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
         str(settings.model_http2_enabled).lower(),
     )
 
-    provider: ModelProviderAdapter = StructuredChatProvider(
+    provider: ModelProviderAdapter = RuntimeStructuredChatProvider(
         api_adapter=api_adapter,
         base_url=settings.model_base_url,
         api_key=key,
