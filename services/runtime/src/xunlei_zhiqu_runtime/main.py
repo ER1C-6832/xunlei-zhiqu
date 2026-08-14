@@ -15,12 +15,13 @@ from xunlei_zhiqu_runtime.config import get_settings
 from xunlei_zhiqu_runtime.models import CaptureBatch, HealthResponse, LinkFavoriteCreateRequest, LinkFavoriteUpdateRequest, LinkHistoryItem, ManualJobCreateRequest, ResourceJobCreateRequest, ResourceJobSnapshot, ResourcePlan
 from xunlei_zhiqu_runtime.providers.base import ModelProviderRequestError, ModelProviderResponseError, ModelProviderTimeoutError
 from xunlei_zhiqu_runtime.providers.factory import create_provider
+from xunlei_zhiqu_runtime.services import job_store as job_store_module
 from xunlei_zhiqu_runtime.services.analyzer import CaptureAnalyzer
 from xunlei_zhiqu_runtime.services.client_session import create_client_session_auth
 from xunlei_zhiqu_runtime.services.confirmation import compile_confirmed_request
 from xunlei_zhiqu_runtime.services.download_executor import NoopDownloadExecutor, execution_assets_from_manual_job, execution_assets_from_resource_job, execution_expected_total_bytes, execution_request_from_assets, execution_source_count
 from xunlei_zhiqu_runtime.services.download_state_store import DownloadStateStore
-from xunlei_zhiqu_runtime.services.job_store import cancel_job, create_favorite, create_job, create_manual_job, get_job, initialize_job_store, list_jobs as list_stored_jobs, list_link_history, pause_job, persist_execution_state, project_execution_status, restored_execution_records, resume_job, set_favorite
+from xunlei_zhiqu_runtime.services.job_store import cancel_job, create_favorite, create_job, create_manual_job, initialize_job_store, list_link_history, pause_job, persist_execution_state, project_execution_status, restored_execution_records, resume_job, set_favorite
 from xunlei_zhiqu_runtime.services.plan_cache import ResourcePlanCache
 from xunlei_zhiqu_runtime.services.recovery import PendingRecoveryView, RecoveryCandidateChoiceResult, RecoveryCaptureRequest, RecoveryCaptureResult, RecoveryHandoff, RecoveryService
 from xunlei_zhiqu_runtime.services.recovery_http_executor import RecoverableHttpDownloadExecutor
@@ -160,7 +161,7 @@ async def create_resource_job(payload: ResourceJobCreateRequest, request: Reques
             except Exception:
                 cancel_job(job.job_id)
                 raise
-            return get_job(job.job_id) or job
+            return _read_job_snapshot(job.job_id) or job
         job = create_job(compiled)
         if compiled.delivery_target == "local":
             await request.app.state.download_executor.create(execution_request_from_assets(job, execution_assets_from_resource_job(compiled)))
@@ -184,7 +185,7 @@ async def create_manual_resource_job(payload: ManualJobCreateRequest, request: R
             except Exception:
                 cancel_job(job.job_id)
                 raise
-            return get_job(job.job_id) or job
+            return _read_job_snapshot(job.job_id) or job
         job = create_manual_job(payload)
         if payload.delivery_target == "local":
             await request.app.state.download_executor.create(execution_request_from_assets(job, execution_assets_from_manual_job(payload)))
@@ -197,12 +198,12 @@ async def create_manual_resource_job(payload: ManualJobCreateRequest, request: R
 
 @app.get("/v1/jobs", response_model=list[ResourceJobSnapshot])
 async def list_jobs() -> list[ResourceJobSnapshot]:
-    return list_stored_jobs()
+    return _read_jobs_snapshot()
 
 
 @app.get("/v1/jobs/{job_id}", response_model=ResourceJobSnapshot)
 async def read_job(job_id: str) -> ResourceJobSnapshot:
-    job = get_job(job_id)
+    job = _read_job_snapshot(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="下载任务不存在")
     return job
@@ -210,7 +211,7 @@ async def read_job(job_id: str) -> ResourceJobSnapshot:
 
 @app.post("/v1/jobs/{job_id}/pause", response_model=ResourceJobSnapshot)
 async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
-    job = get_job(job_id)
+    job = _read_job_snapshot(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="下载任务不存在")
     try:
@@ -218,7 +219,7 @@ async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapsh
             if job.status in {"interrupted", "waiting_for_source"}:
                 raise ValueError("下载当前不能暂停")
             await request.app.state.download_executor.pause(job_id)
-            return get_job(job_id) or job
+            return _read_job_snapshot(job_id) or job
         paused = pause_job(job_id)
         if paused is None:
             raise HTTPException(status_code=404, detail="下载任务不存在")
@@ -230,7 +231,7 @@ async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapsh
 
 @app.post("/v1/jobs/{job_id}/resume", response_model=ResourceJobSnapshot)
 async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
-    job = get_job(job_id)
+    job = _read_job_snapshot(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="下载任务不存在")
     try:
@@ -243,7 +244,7 @@ async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnaps
             if status is not None and service is not None and status.state == "failed":
                 if job.status == "interrupted" and job.next_action == "continue_acquisition":
                     await executor.retry_same_source(job_id)
-                    return get_job(job_id) or job
+                    return _read_job_snapshot(job_id) or job
                 execution_request = await executor.execution_request(job_id)
                 asset = _active_execution_asset(execution_request, status.current_asset_id)
                 decision = service.diagnosis_for(job_id, status, asset)
@@ -258,9 +259,9 @@ async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnaps
                 if decision.action in {"retry_same_source", "resume_same_source"}:
                     service.note_same_source_retry(job_id, status)
                     await executor.retry_same_source(job_id)
-                    return get_job(job_id) or job
+                    return _read_job_snapshot(job_id) or job
             await executor.resume(job_id)
-            return get_job(job_id) or job
+            return _read_job_snapshot(job_id) or job
         resumed = resume_job(job_id)
         if resumed is None:
             raise HTTPException(status_code=404, detail="下载任务不存在")
@@ -275,7 +276,7 @@ async def continue_acquisition(job_id: str, request: Request) -> RecoveryHandoff
     service: RecoveryService | None = request.app.state.recovery_service
     if service is None:
         raise HTTPException(status_code=409, detail="当前下载执行器不支持一键续取")
-    job = get_job(job_id)
+    job = _read_job_snapshot(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="下载任务不存在")
     browser_reacquisition = job.status == "interrupted" and job.next_action == "continue_acquisition"
@@ -320,7 +321,7 @@ async def choose_recovery_candidate(recovery_id: str, candidate_id: str, request
 
 @app.post("/v1/jobs/{job_id}/cancel", status_code=204)
 async def cancel_resource_job(job_id: str, request: Request) -> Response:
-    job = get_job(job_id)
+    job = _read_job_snapshot(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="下载任务不存在")
     await request.app.state.download_executor.cancel(job_id)
@@ -352,9 +353,19 @@ def _uses_real_local_executor(request: Request, delivery_target: str) -> bool:
     return delivery_target == "local" and request.app.state.download_executor_mode == "http"
 
 
+def _read_jobs_snapshot() -> list[ResourceJobSnapshot]:
+    """Pure in-memory read; state progression belongs to the Runtime reconciler."""
+    return list(job_store_module._jobs)
+
+
+def _read_job_snapshot(job_id: str) -> ResourceJobSnapshot | None:
+    index = job_store_module._find_index(job_id)
+    return job_store_module._jobs[index] if index is not None else None
+
+
 async def _reconcile_execution_loop(app: FastAPI) -> None:
     while True:
-        for job in list_stored_jobs():
+        for job in _read_jobs_snapshot():
             if job.execution_mode != "download_engine":
                 continue
             try:
@@ -371,7 +382,7 @@ async def _reconcile_execution_job(app: FastAPI, job: ResourceJobSnapshot) -> No
     status = await executor.status(job.job_id)
     if status is None:
         return
-    projected = project_execution_status(job.job_id, status) or job
+    project_execution_status(job.job_id, status)
     service: RecoveryService | None = app.state.recovery_service
     if service is None or status.state != "failed":
         return
@@ -411,10 +422,6 @@ async def _reconcile_execution_job(app: FastAPI, job: ResourceJobSnapshot) -> No
             service.offer_alternative_source(job.job_id)
         else:
             service.mark_waiting_for_source(job.job_id, decision)
-        return
-
-    if projected.status == "waiting_for_source":
-        return
 
 
 def _active_execution_asset(execution_request, current_asset_id: str | None):
