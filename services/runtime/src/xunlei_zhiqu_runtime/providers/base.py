@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import time
-from typing import Literal
+from typing import Any, Literal
 
 from xunlei_zhiqu_runtime.models import EvidencePack, ResourcePlan
 
@@ -20,7 +20,7 @@ class ModelProviderRequestError(ModelProviderError):
 
 
 class ModelProviderResponseError(ModelProviderError):
-    """The provider answered, but the response could not be used as a valid ResourcePlan."""
+    """The provider answered, but the response could not be used as a valid model result."""
 
 
 ModelProgressPhase = Literal[
@@ -54,8 +54,14 @@ class ModelAnalysisResult:
     metrics: ModelCallMetrics
 
 
+@dataclass(frozen=True, slots=True)
+class StructuredModelResult:
+    value: dict[str, Any]
+    metrics: ModelCallMetrics
+
+
 class ModelProviderAdapter(ABC):
-    """Runtime's current ModelGatewayPort: EvidencePack -> validated ResourcePlan."""
+    """Runtime semantic model boundary used by Node A and Node B."""
 
     name: str
 
@@ -87,6 +93,23 @@ class ModelProviderAdapter(ABC):
                 model=self.model_name,
                 latency_ms=int((time.perf_counter() - started) * 1000),
             ),
+        )
+
+    async def generate_structured(
+        self,
+        *,
+        system_prompt: str,
+        document: object,
+        max_completion_tokens: int = 512,
+        temperature: float = 0.1,
+    ) -> StructuredModelResult:
+        """Generate a small provider-neutral JSON object for a Runtime semantic capability.
+
+        Supplier request/response dialect details remain inside provider implementations.
+        Development-only providers may leave this unsupported; callers must fail closed.
+        """
+        raise ModelProviderResponseError(
+            f"当前模型 Provider {self.name} 不支持结构化语义调用"
         )
 
     async def aclose(self) -> None:
