@@ -35,7 +35,7 @@ class DiagnosisDecision:
 
 
 class DiagnosisService:
-    """Deterministic Stage F failure routing. No model call is allowed here."""
+    """Deterministic failure routing. No model call is allowed here."""
 
     def decide(
         self,
@@ -47,11 +47,19 @@ class DiagnosisService:
         if status.state != "failed":
             return DiagnosisDecision("stop", "download_stopped")
 
-        if status.failure_kind in {"runtime_interrupted", "connection_interrupted"}:
+        if status.failure_kind == "runtime_interrupted":
             return DiagnosisDecision(
                 "resume_same_source" if status.resume_available else "retry_same_source",
                 "network_interrupted",
             )
+
+        if status.failure_kind == "connection_interrupted":
+            if same_source_retry_count < 1:
+                return DiagnosisDecision(
+                    "resume_same_source" if status.resume_available else "retry_same_source",
+                    "network_interrupted",
+                )
+            return DiagnosisDecision("reacquire_source", "network_interrupted")
 
         if status.failure_kind == "http_error":
             code = status.http_status_code
