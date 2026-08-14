@@ -378,6 +378,14 @@ async def _reconcile_execution_loop(app: FastAPI) -> None:
 
 
 async def _reconcile_execution_job(app: FastAPI, job: ResourceJobSnapshot) -> None:
+    # Once the user has been offered/entered reacquisition, the failed executor
+    # remains intentionally frozen until an explicit user recovery action occurs.
+    # Do not let its old failure facts overwrite the pending recovery UI state.
+    if job.status == "waiting_for_source" or (
+        job.status == "interrupted" and job.next_action == "continue_acquisition"
+    ):
+        return
+
     executor = app.state.download_executor
     status = await executor.status(job.job_id)
     if status is None:
