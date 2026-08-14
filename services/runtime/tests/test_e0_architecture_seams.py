@@ -7,7 +7,8 @@ from xunlei_zhiqu_runtime.services.client_session import (
 )
 from xunlei_zhiqu_runtime.services.download_executor import (
     NoopDownloadExecutor,
-    execution_request_from_manual_job,
+    execution_assets_from_manual_job,
+    execution_request_from_assets,
 )
 from xunlei_zhiqu_runtime.services.job_store import cancel_job, create_manual_job, get_job
 
@@ -39,7 +40,7 @@ def test_cancel_removes_demo_job_without_expanding_public_job_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_noop_download_executor_receives_runtime_internal_sources() -> None:
+async def test_noop_download_executor_receives_runtime_internal_assets() -> None:
     payload = ManualJobCreateRequest(
         schema_version="0.1",
         links=[
@@ -50,15 +51,21 @@ async def test_noop_download_executor_receives_runtime_internal_sources() -> Non
         delivery_target="local",
     )
     job = create_manual_job(payload)
-    execution = execution_request_from_manual_job(job, payload)
+    assets = execution_assets_from_manual_job(payload)
+    execution = execution_request_from_assets(job, assets)
     assert execution.job.job_id == job.job_id
-    assert execution.sources == tuple(payload.links)
+    assert [asset.primary_source for asset in execution.assets] == payload.links
 
     executor = NoopDownloadExecutor()
     await executor.create(execution)
     await executor.pause(job.job_id)
     await executor.resume(job.job_id)
-    await executor.add_source(job.job_id, "https://mirror-2.example.test/e0-executor-fixture.zip")
+    await executor.add_source(
+        job.job_id,
+        execution.assets[0].asset_id,
+        "https://mirror-2.example.test/e0-executor-fixture.zip",
+    )
     assert await executor.status(job.job_id) is None
     await executor.cancel(job.job_id)
+    await executor.aclose()
     assert cancel_job(job.job_id) is True

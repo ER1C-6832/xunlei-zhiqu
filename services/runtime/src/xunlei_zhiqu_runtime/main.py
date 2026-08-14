@@ -34,9 +34,13 @@ from xunlei_zhiqu_runtime.services.client_session import create_client_session_a
 from xunlei_zhiqu_runtime.services.confirmation import compile_confirmed_request
 from xunlei_zhiqu_runtime.services.download_executor import (
     NoopDownloadExecutor,
-    execution_request_from_manual_job,
-    execution_request_from_resource_job,
+    execution_assets_from_manual_job,
+    execution_assets_from_resource_job,
+    execution_expected_total_bytes,
+    execution_request_from_assets,
+    execution_source_count,
 )
+from xunlei_zhiqu_runtime.services.http_download_executor import HttpDownloadExecutor
 from xunlei_zhiqu_runtime.services.job_store import (
     cancel_job,
     create_favorite,
@@ -46,6 +50,7 @@ from xunlei_zhiqu_runtime.services.job_store import (
     list_jobs as list_stored_jobs,
     list_link_history,
     pause_job,
+    project_execution_status,
     resume_job,
     set_favorite,
 )
@@ -64,20 +69,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.runtime_static_session_token is not None
         else None
     )
+    download_executor = (
+        HttpDownloadExecutor(settings.download_directory_path)
+        if settings.download_executor == "http"
+        else NoopDownloadExecutor()
+    )
     app.state.settings = settings
     app.state.provider = provider
     app.state.client_session_auth = create_client_session_auth(
         settings.runtime_auth_mode,
         session_token,
     )
-    app.state.download_executor = NoopDownloadExecutor()
+    app.state.download_executor = download_executor
+    app.state.download_executor_mode = settings.download_executor
     app.state.plan_cache = ResourcePlanCache(
         ttl_seconds=settings.plan_cache_ttl_seconds,
         max_entries=settings.plan_cache_max_entries,
     )
     app.state.analyzer = CaptureAnalyzer(provider, cache=app.state.plan_cache)
-    yield
-    await provider.aclose()
+    try:
+        yield
+    finally:
+        await download_executor.aclose()
+        await provider.aclose()
 
 
 _boot_settings = get_settings()
@@ -209,67 +223,127 @@ async def analyze_capture_stream(
 async def create_resource_job(payload: ResourceJobCreateRequest, request: Request) -> ResourceJobSnapshot:
     try:
         compiled = compile_confirmed_request(payload)
+        if _uses_real_local_executor(request, compiled.delivery_target):
+            assets = execution_assets_from_resource_job(compiled)
+            request.app.state.download_executor.validate_assets(assets)
+            destination = str(request.app.state.settings.download_directory_path.expanduser().resolve())
+            job = create_job(
+                compiled,
+                execution_mode="download_engine",
+                total_bytes_override=execution_expected_total_bytes(assets),
+                source_count_override=execution_source_count(assets),
+                destination_override=destination,
+            )
+            try:
+                await request.app.state.download_executor.create(
+                    execution_request_from_assets(job, assets)
+                )
+            except Exception:
+                cancel_job(job.job_id)
+                raise
+            return await _refresh_execution_job(request, job)
+
         job = create_job(compiled)
-        await request.app.state.download_executor.create(
-            execution_request_from_resource_job(job, compiled)
-        )
+        if compiled.delivery_target == "local":
+            await request.app.state.download_executor.create(
+                execution_request_from_assets(job, execution_assets_from_resource_job(compiled))
+            )
         return job
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="无法创建本地下载文件") from exc
 
 
 @app.post("/v1/jobs/manual", response_model=ResourceJobSnapshot)
 async def create_manual_resource_job(payload: ManualJobCreateRequest, request: Request) -> ResourceJobSnapshot:
     try:
+        if _uses_real_local_executor(request, payload.delivery_target):
+            assets = execution_assets_from_manual_job(payload)
+            request.app.state.download_executor.validate_assets(assets)
+            destination = str(request.app.state.settings.download_directory_path.expanduser().resolve())
+            job = create_manual_job(
+                payload,
+                execution_mode="download_engine",
+                total_bytes_override=execution_expected_total_bytes(assets),
+                source_count_override=execution_source_count(assets),
+                destination_override=destination,
+            )
+            try:
+                await request.app.state.download_executor.create(
+                    execution_request_from_assets(job, assets)
+                )
+            except Exception:
+                cancel_job(job.job_id)
+                raise
+            return await _refresh_execution_job(request, job)
+
         job = create_manual_job(payload)
-        await request.app.state.download_executor.create(
-            execution_request_from_manual_job(job, payload)
-        )
+        if payload.delivery_target == "local":
+            await request.app.state.download_executor.create(
+                execution_request_from_assets(job, execution_assets_from_manual_job(payload))
+            )
         return job
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="无法创建本地下载文件") from exc
 
 
 @app.get("/v1/jobs", response_model=list[ResourceJobSnapshot])
-async def list_jobs() -> list[ResourceJobSnapshot]:
-    return list_stored_jobs()
+async def list_jobs(request: Request) -> list[ResourceJobSnapshot]:
+    jobs = list_stored_jobs()
+    return [await _refresh_execution_job(request, job) for job in jobs]
 
 
 @app.get("/v1/jobs/{job_id}", response_model=ResourceJobSnapshot)
-async def read_job(job_id: str) -> ResourceJobSnapshot:
+async def read_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="ResourceJob not found")
-    return job
+    return await _refresh_execution_job(request, job)
 
 
 @app.post("/v1/jobs/{job_id}/pause", response_model=ResourceJobSnapshot)
 async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
-    try:
-        job = pause_job(job_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="ResourceJob not found")
-    await request.app.state.download_executor.pause(job_id)
-    return job
+    try:
+        if job.execution_mode == "download_engine":
+            await request.app.state.download_executor.pause(job_id)
+            return await _refresh_execution_job(request, job)
+        paused = pause_job(job_id)
+        if paused is None:
+            raise HTTPException(status_code=404, detail="ResourceJob not found")
+        await request.app.state.download_executor.pause(job_id)
+        return paused
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/v1/jobs/{job_id}/resume", response_model=ResourceJobSnapshot)
 async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
-    try:
-        job = resume_job(job_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="ResourceJob not found")
-    await request.app.state.download_executor.resume(job_id)
-    return job
+    try:
+        if job.execution_mode == "download_engine":
+            await request.app.state.download_executor.resume(job_id)
+            return await _refresh_execution_job(request, job)
+        resumed = resume_job(job_id)
+        if resumed is None:
+            raise HTTPException(status_code=404, detail="ResourceJob not found")
+        await request.app.state.download_executor.resume(job_id)
+        return resumed
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/v1/jobs/{job_id}/cancel", status_code=204)
 async def cancel_resource_job(job_id: str, request: Request) -> Response:
-    if get_job(job_id) is None:
+    job = get_job(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="ResourceJob not found")
     await request.app.state.download_executor.cancel(job_id)
     if not cancel_job(job_id):
@@ -294,6 +368,19 @@ async def update_link_favorite(history_id: str, payload: LinkFavoriteUpdateReque
     if item is None:
         raise HTTPException(status_code=404, detail="Link library item not found")
     return item
+
+
+def _uses_real_local_executor(request: Request, delivery_target: str) -> bool:
+    return delivery_target == "local" and request.app.state.download_executor_mode == "http"
+
+
+async def _refresh_execution_job(request: Request, job: ResourceJobSnapshot) -> ResourceJobSnapshot:
+    if job.execution_mode != "download_engine":
+        return job
+    status = await request.app.state.download_executor.status(job.job_id)
+    if status is None:
+        return job
+    return project_execution_status(job.job_id, status) or job
 
 
 def _analysis_stream_error(exc: Exception) -> str:

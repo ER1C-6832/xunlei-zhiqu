@@ -9,6 +9,7 @@ from xunlei_zhiqu_runtime.models import (
     ResourceJobCreateRequest,
     ResourceJobSnapshot,
 )
+from xunlei_zhiqu_runtime.services.download_executor import DownloadExecutionStatus
 from xunlei_zhiqu_runtime.services.jobs import fixture_jobs
 
 
@@ -75,7 +76,14 @@ _history: list[LinkHistoryItem] = [
 ]
 
 
-def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
+def create_job(
+    payload: ResourceJobCreateRequest,
+    *,
+    execution_mode: str = "demo",
+    total_bytes_override: int | None = None,
+    source_count_override: int | None = None,
+    destination_override: str | None = None,
+) -> ResourceJobSnapshot:
     for existing in _jobs:
         if existing.plan_id == payload.plan.plan_id and existing.delivery_target == payload.delivery_target:
             return existing
@@ -97,12 +105,21 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
         for candidate_id in item.candidate_ids
     }
 
-    total_bytes = _selected_total_bytes(payload, selected_order)
+    total_bytes = (
+        total_bytes_override
+        if total_bytes_override is not None
+        else _selected_total_bytes(payload, selected_order)
+    )
     selected_labels = [item.label for item in payload.plan.selected]
-    subtitle = " · ".join(selected_labels[:3]) or payload.plan.overview or "节点 A 资源计划"
+    subtitle = " · ".join(selected_labels[:3]) or payload.plan.overview or "已确认资源"
     target = payload.delivery_target
-    destination = payload.destination or _default_destination(payload.plan.resource_title, target)
+    destination = (
+        destination_override
+        or payload.destination
+        or _default_destination(payload.plan.resource_title, target)
+    )
     source_page = payload.capture.page.url if payload.capture else None
+    real_local = target == "local" and execution_mode == "download_engine"
 
     job = ResourceJobSnapshot(
         job_id=f"job_{uuid4().hex[:10]}",
@@ -118,16 +135,16 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
         stage_label=(
             "智取计划已确认，准备保存到云盘"
             if target == "cloud"
-            else "资源计划已确认，Runtime 正在创建本地任务"
+            else "准备下载" if real_local else "任务已创建，等待执行"
         ),
         next_action="pause",
-        source_count=len(source_ids),
+        source_count=source_count_override if source_count_override is not None else len(source_ids),
         excluded_count=len(excluded_ids),
         created_at=datetime.now(UTC),
         destination=destination,
         delivery_target=target,
         plan_id=payload.plan.plan_id,
-        execution_mode="demo",
+        execution_mode="download_engine" if real_local else "demo",
         resource_type=payload.plan.resource_type,
         plan_overview=payload.plan.overview,
         selected_items=selected_labels,
@@ -135,13 +152,21 @@ def create_job(payload: ResourceJobCreateRequest) -> ResourceJobSnapshot:
         source_page=source_page,
     )
     _jobs.insert(0, job)
-    _created_job_ids.add(job.job_id)
+    if job.execution_mode == "demo":
+        _created_job_ids.add(job.job_id)
     _job_contexts[job.job_id] = payload
     _record_history(job, payload, selected_order)
     return job
 
 
-def create_manual_job(payload: ManualJobCreateRequest) -> ResourceJobSnapshot:
+def create_manual_job(
+    payload: ManualJobCreateRequest,
+    *,
+    execution_mode: str = "demo",
+    total_bytes_override: int | None = None,
+    source_count_override: int | None = None,
+    destination_override: str | None = None,
+) -> ResourceJobSnapshot:
     links = [value.strip() for value in payload.links if value.strip()]
     if not links:
         raise ValueError("至少需要一个有效链接")
@@ -149,9 +174,10 @@ def create_manual_job(payload: ManualJobCreateRequest) -> ResourceJobSnapshot:
     primary = links[0]
     title = payload.title.strip() if payload.title and payload.title.strip() else _title_from_link(primary)
     target = payload.delivery_target
-    destination = payload.destination or _default_destination(title, target)
+    destination = destination_override or payload.destination or _default_destination(title, target)
     resource_type = _infer_resource_type(primary)
     selected_items = [_title_from_link(link) for link in links[:5]]
+    real_local = target == "local" and execution_mode == "download_engine"
 
     job = ResourceJobSnapshot(
         job_id=f"job_{uuid4().hex[:10]}",
@@ -161,25 +187,26 @@ def create_manual_job(payload: ManualJobCreateRequest) -> ResourceJobSnapshot:
         status="planning",
         progress=0,
         downloaded_bytes=0,
-        total_bytes=0,
+        total_bytes=total_bytes_override or 0,
         speed_bytes_per_second=0,
         eta_seconds=None,
-        stage_label="普通任务已创建，等待执行",
+        stage_label="准备下载" if real_local else "普通任务已创建，等待执行",
         next_action="pause",
-        source_count=len(links),
+        source_count=source_count_override if source_count_override is not None else len(links),
         excluded_count=0,
         created_at=datetime.now(UTC),
         destination=destination,
         delivery_target=target,
-        execution_mode="demo",
+        execution_mode="download_engine" if real_local else "demo",
         resource_type=resource_type,
-        plan_overview="手工新建的普通下载任务；复杂页面仍建议使用迅雷智取扩展理解与选型。",
+        plan_overview="手工创建的下载任务",
         selected_items=selected_items,
-        alternative_count=max(0, len(links) - 1),
+        alternative_count=0,
         source_page=primary if primary.startswith(("http://", "https://")) else None,
     )
     _jobs.insert(0, job)
-    _created_job_ids.add(job.job_id)
+    if job.execution_mode == "demo":
+        _created_job_ids.add(job.job_id)
     _history.insert(
         0,
         LinkHistoryItem(
@@ -277,6 +304,66 @@ def get_job(job_id: str) -> ResourceJobSnapshot | None:
     return _jobs[index]
 
 
+def project_execution_status(
+    job_id: str,
+    status: DownloadExecutionStatus,
+) -> ResourceJobSnapshot | None:
+    index = _find_index(job_id)
+    if index is None:
+        return None
+    job = _jobs[index]
+    if job.execution_mode != "download_engine":
+        return job
+
+    total_bytes = status.total_bytes if status.total_bytes > 0 else job.total_bytes
+    downloaded_bytes = status.downloaded_bytes
+    if status.state == "completed":
+        total_bytes = max(total_bytes, downloaded_bytes)
+        downloaded_bytes = total_bytes
+        progress = 100.0
+    elif total_bytes > 0:
+        progress = round(min(100.0, downloaded_bytes / total_bytes * 100), 1)
+    else:
+        progress = 0.0
+
+    public_status = {
+        "queued": "planning",
+        "downloading": "downloading",
+        "paused": "paused",
+        "completed": "completed",
+        "failed": "waiting_for_source",
+        "cancelled": job.status,
+    }[status.state]
+    stage_label = _execution_stage_label(status)
+    issue = status.error if status.state == "failed" else None
+    next_action = {
+        "queued": "pause",
+        "downloading": "pause",
+        "paused": "resume",
+        "completed": "open",
+        "failed": "continue_acquisition",
+        "cancelled": None,
+    }[status.state]
+
+    updated = job.model_copy(
+        update={
+            "status": public_status,
+            "progress": progress,
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+            "speed_bytes_per_second": status.speed_bytes_per_second,
+            "eta_seconds": status.eta_seconds,
+            "stage_label": stage_label,
+            "issue": issue,
+            "next_action": next_action,
+            "destination": status.destination or job.destination,
+        }
+    )
+    _jobs[index] = updated
+    _refresh_history_statuses()
+    return updated
+
+
 def list_link_history() -> list[LinkHistoryItem]:
     _refresh_history_statuses()
     return sorted(_history, key=lambda item: item.added_at, reverse=True)
@@ -287,6 +374,8 @@ def pause_job(job_id: str) -> ResourceJobSnapshot | None:
     if index is None:
         return None
     job = _jobs[index]
+    if job.execution_mode == "download_engine":
+        raise ValueError("真实下载任务由下载执行器控制")
     if job.status not in {"planning", "downloading", "verifying", "paused"}:
         raise ValueError(f"任务当前状态 {job.status} 不支持暂停")
     if job.status != "paused":
@@ -309,6 +398,8 @@ def resume_job(job_id: str) -> ResourceJobSnapshot | None:
     if index is None:
         return None
     job = _jobs[index]
+    if job.execution_mode == "download_engine":
+        raise ValueError("真实下载任务由下载执行器控制")
     if job.status != "paused":
         raise ValueError(f"任务当前状态 {job.status} 不支持恢复")
     speed = _demo_speed(job.total_bytes) if job.job_id in _created_job_ids else 8_400_000
@@ -352,6 +443,20 @@ def cancel_job(job_id: str) -> bool:
             )
     _history[:] = retained_history
     return True
+
+
+def _execution_stage_label(status: DownloadExecutionStatus) -> str:
+    if status.state == "queued":
+        return "准备下载"
+    if status.state == "downloading":
+        return f"正在下载 {status.current_asset_label}" if status.current_asset_label else "正在下载"
+    if status.state == "paused":
+        return "已暂停"
+    if status.state == "completed":
+        return "已完成"
+    if status.state == "failed":
+        return "下载中断"
+    return "任务已取消"
 
 
 def _selected_total_bytes(payload: ResourceJobCreateRequest, selected_order: list[str]) -> int:
@@ -487,6 +592,8 @@ def _find_index(job_id: str) -> int | None:
 
 
 def _advance_demo_job(job: ResourceJobSnapshot) -> ResourceJobSnapshot:
+    if job.execution_mode != "demo":
+        return job
     if job.job_id not in _created_job_ids or job.status in {"paused", "waiting_for_source", "completed"}:
         return job
 
@@ -503,9 +610,9 @@ def _advance_demo_job(job: ResourceJobSnapshot) -> ResourceJobSnapshot:
                 "speed_bytes_per_second": speed,
                 "eta_seconds": _eta(job.total_bytes, downloaded, speed),
                 "stage_label": (
-                    "正在将资源保存到云盘（阶段 B 演示执行）"
+                    "正在将资源保存到云盘（演示）"
                     if cloud
-                    else "Runtime 已接管本地资源任务（阶段 B 演示执行）"
+                    else "正在执行演示任务"
                 ),
                 "next_action": "pause",
             }
@@ -517,25 +624,13 @@ def _advance_demo_job(job: ResourceJobSnapshot) -> ResourceJobSnapshot:
         downloaded = min(ceiling, job.downloaded_bytes + step)
         progress = round(downloaded / job.total_bytes * 100, 1)
         speed = _demo_speed(job.total_bytes)
-        if downloaded >= ceiling:
-            stage_label = (
-                "阶段 B 云盘任务流已验证，等待阶段 E 真实执行"
-                if cloud
-                else "阶段 B 任务流已验证，等待阶段 E 真实下载引擎"
-            )
-        else:
-            stage_label = (
-                "正在保存到云盘（阶段 B 演示执行）"
-                if cloud
-                else "Runtime 正在更新任务进度（阶段 B 演示执行）"
-            )
         return job.model_copy(
             update={
                 "progress": progress,
                 "downloaded_bytes": downloaded,
                 "speed_bytes_per_second": 0 if downloaded >= ceiling else speed,
                 "eta_seconds": None if downloaded >= ceiling else _eta(job.total_bytes, downloaded, speed),
-                "stage_label": stage_label,
+                "stage_label": "正在保存到云盘（演示）" if cloud else "演示任务进行中",
             }
         )
 
@@ -544,11 +639,7 @@ def _advance_demo_job(job: ResourceJobSnapshot) -> ResourceJobSnapshot:
             update={
                 "speed_bytes_per_second": 0,
                 "eta_seconds": None,
-                "stage_label": (
-                    "已进入云盘任务队列，等待阶段 E 真实执行"
-                    if cloud
-                    else "已进入 Runtime，等待阶段 E 下载引擎提供真实进度"
-                ),
+                "stage_label": "已进入云盘任务队列" if cloud else "演示任务已创建",
             }
         )
 

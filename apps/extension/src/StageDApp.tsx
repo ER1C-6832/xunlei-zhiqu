@@ -82,7 +82,7 @@ export function StageDExtensionApp() {
   const [deliveryTarget, setDeliveryTarget] = useState<DeliveryTarget>('local');
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [annotationCount, setAnnotationCount] = useState(0);
+  const [taskNotice, setTaskNotice] = useState(false);
   const [discovery, setDiscovery] = useState<DiscoveryState>(EMPTY_DISCOVERY);
   const [discoveryUpdating, setDiscoveryUpdating] = useState(false);
   const capabilities = useZhiquCapabilities();
@@ -152,14 +152,20 @@ export function StageDExtensionApp() {
     });
   }, [capabilities]);
 
+  useEffect(() => {
+    if (!taskNotice) return;
+    const timer = window.setTimeout(() => setTaskNotice(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [taskNotice]);
+
   function prepareLocalCapture(mode: CaptureMode) {
     setError(null);
     setPlan(null);
     setBatch(null);
     setCreatedJob(null);
     setFavoriteItem(null);
+    setTaskNotice(false);
     setConfirmedIds(new Set());
-    setAnnotationCount(0);
     setStatus(mode === 'rectangle' ? 'selecting' : 'scanning');
   }
 
@@ -226,7 +232,7 @@ export function StageDExtensionApp() {
     if (!batch) return;
     if (!canAnalyze) {
       setStatus('error');
-      setError('当前运行形态只提供本地资源发现，智能分析暂不可用。');
+      setError('当前只提供本地资源发现，智能分析暂不可用。');
       return;
     }
     analysisProgress.begin();
@@ -234,7 +240,7 @@ export function StageDExtensionApp() {
     setError(null);
     setCreatedJob(null);
     setFavoriteItem(null);
-    if (forceRefresh) setAnnotationCount(0);
+    setTaskNotice(false);
 
     try {
       const nextPlan = await zhiquService.analyzeResources(batch, {
@@ -248,11 +254,9 @@ export function StageDExtensionApp() {
       console.debug('[迅雷智取] plan', nextPlan);
 
       try {
-        const count = await projectPlanToPage(batch, nextPlan);
-        setAnnotationCount(count);
+        await projectPlanToPage(batch, nextPlan);
       } catch (annotationError) {
         console.warn('[迅雷智取] 无法在网页标出推荐项', annotationError);
-        setAnnotationCount(0);
       }
     } catch (analysisError) {
       analysisProgress.fail();
@@ -277,7 +281,7 @@ export function StageDExtensionApp() {
       });
       if (response?.ok && response.state) setDiscovery(readDiscoveryState(response.state));
     } catch (toggleError) {
-      setError(toggleError instanceof Error ? humanizeError(toggleError.message) : '无法修改页面自动发现设置。');
+      setError(toggleError instanceof Error ? humanizeError(toggleError.message) : '无法修改自动发现设置。');
     } finally {
       setDiscoveryUpdating(false);
     }
@@ -310,11 +314,11 @@ export function StageDExtensionApp() {
           });
           if (response?.ok) return;
         } catch {
-          // Try the next candidate when one recommendation is not directly represented by a DOM element.
+          // Try the next candidate when one recommendation is not represented by a DOM element.
         }
       }
     }
-    setError('网页中暂时无法定位推荐下载项，可以直接查看已经标出的“推荐”标签。');
+    setError('网页中暂时无法定位这个下载项。');
   }
 
   function toggleItem(itemId: string) {
@@ -328,7 +332,11 @@ export function StageDExtensionApp() {
   }
 
   async function createResourceJob() {
-    if (!plan || !batch || createdJob) return;
+    if (createdJob) {
+      openTaskCenter('downloads');
+      return;
+    }
+    if (!plan || !batch) return;
     if (!confirmedIds.size) {
       setStatus('error');
       setError('请至少选择一个要下载的资源。');
@@ -336,7 +344,7 @@ export function StageDExtensionApp() {
     }
     if (!selectedDeliveryAvailable) {
       setStatus('error');
-      setError('当前没有可用的下载交付能力，请连接迅雷客户端后再创建任务。');
+      setError('当前没有可用的下载能力，请连接迅雷客户端后再创建任务。');
       return;
     }
 
@@ -353,8 +361,8 @@ export function StageDExtensionApp() {
     try {
       const job = await zhiquService.createJob(payload);
       setCreatedJob(job);
+      setTaskNotice(true);
       setStatus('idle');
-      void zhiquService.openTaskCenter('downloads');
     } catch (createError) {
       setStatus('error');
       setError(createError instanceof Error ? humanizeError(createError.message) : '创建下载任务失败，请重试。');
@@ -365,7 +373,7 @@ export function StageDExtensionApp() {
     if (!plan || favoriteItem) return;
     if (!canUseTaskRuntime) {
       setStatus('error');
-      setError('当前没有可用的任务中心，连接迅雷客户端后可使用收藏。');
+      setError('连接迅雷客户端后可使用收藏。');
       return;
     }
     const payload: LinkFavoriteCreateRequest = { schema_version: '0.1', plan, capture: batch };
@@ -383,7 +391,7 @@ export function StageDExtensionApp() {
   function openTaskCenter(target: 'downloads' | 'links') {
     if (!canUseTaskRuntime) {
       setStatus('error');
-      setError('当前没有可用的任务中心，请先连接迅雷客户端。');
+      setError('请先连接迅雷客户端。');
       return;
     }
     void zhiquService.openTaskCenter(target);
@@ -406,7 +414,7 @@ export function StageDExtensionApp() {
           {(status === 'selecting' || status === 'scanning') && (
             <div className="zhiqu-working" role="status">
               <LoaderCircle className="spin" size={20} />
-              <span>{status === 'selecting' ? '等待你完成框选…' : '正在本地查找资源…'}</span>
+              <span>{status === 'selecting' ? '等待你完成框选…' : '正在查找可下载内容…'}</span>
             </div>
           )}
 
@@ -430,12 +438,11 @@ export function StageDExtensionApp() {
         <section className="zhiqu-capture-card" aria-live="polite">
           <div className="zhiqu-capture-heading">
             <div>
-              <h1>{capturePathTitle(batch)} · {batch.candidates.length} 项</h1>
-              <p>{capturePathDescription(batch)}</p>
+              <h1>发现 {batch.candidates.length} 项可下载内容</h1>
             </div>
             <Check size={20} aria-hidden="true" />
           </div>
-          <div className="zhiqu-capture-summary">{captureSummary(batch)}</div>
+          {captureSummary(batch) && <div className="zhiqu-capture-summary">{captureSummary(batch)}</div>}
 
           <CapturedResources
             batch={batch}
@@ -444,7 +451,7 @@ export function StageDExtensionApp() {
 
           {capabilities && !canAnalyze && (
             <div className="zhiqu-page-note">
-              <span>当前只提供本地资源发现。连接可用的智能分析服务后，才能继续比较版本和生成推荐。</span>
+              <span>连接智能分析服务后，可以继续比较版本并生成推荐。</span>
             </div>
           )}
 
@@ -513,19 +520,14 @@ export function StageDExtensionApp() {
 
           {capabilities?.runtimeKind === 'cloud_analysis' && (
             <div className="zhiqu-page-note">
-              <span>智能分析已经完成；当前没有客户端任务能力，连接迅雷后才能创建下载任务或收藏。</span>
+              <span>分析已完成。连接迅雷后可创建下载任务或收藏。</span>
             </div>
           )}
 
           {plan.selected.length > 0 && (
-            <div className="zhiqu-page-note zhiqu-page-note-actions">
-              <span>
-                {annotationCount > 0
-                  ? '网页中的推荐下载项已经标出，也可以直接定位过去。'
-                  : '可以把原网页直接滚动到最推荐的下载项。'}
-              </span>
+            <div className="zhiqu-locate-row">
               <button type="button" onClick={() => void focusRecommendedResource()} disabled={status === 'analyzing'}>
-                <MousePointer2 size={14} />定位推荐下载
+                <MousePointer2 size={14} />定位到网页
               </button>
             </div>
           )}
@@ -586,14 +588,18 @@ export function StageDExtensionApp() {
             <button
               className="zhiqu-download"
               type="button"
-              onClick={createResourceJob}
-              disabled={status === 'creating' || status === 'analyzing' || Boolean(createdJob) || confirmedIds.size === 0 || !selectedDeliveryAvailable}
+              onClick={() => void createResourceJob()}
+              disabled={status === 'creating' || status === 'analyzing' || (!createdJob && (confirmedIds.size === 0 || !selectedDeliveryAvailable))}
             >
-              {status === 'creating' ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
+              {status === 'creating'
+                ? <LoaderCircle className="spin" size={18} />
+                : createdJob
+                  ? <ExternalLink size={18} />
+                  : <Download size={18} />}
               {status === 'creating'
                 ? '正在创建…'
                 : createdJob
-                  ? '任务已创建'
+                  ? '打开任务中心'
                   : hasDelivery
                     ? '开始下载'
                     : '连接迅雷后下载'}
@@ -659,11 +665,10 @@ export function StageDExtensionApp() {
             </div>
           )}
 
-          {createdJob && (
-            <div className="zhiqu-success" role="status">
+          {taskNotice && (
+            <div className="zhiqu-success zhiqu-task-notice" role="status">
               <Check size={16} />
-              <span>任务已加入迅雷智取任务中心</span>
-              <button type="button" onClick={() => openTaskCenter('downloads')}><ExternalLink size={15} />打开</button>
+              <span>已创建下载任务</span>
             </div>
           )}
         </section>
@@ -684,7 +689,7 @@ function AnalysisProgressPanel({ preview, progress, label, compact = false }: {
       <div className="zhiqu-analysis-preview-head">
         <div>
           <strong>{preview.title}</strong>
-          <span>已找到 {preview.total} 项资源</span>
+          <span>发现 {preview.total} 项可下载内容</span>
         </div>
         <Sparkles size={18} aria-hidden="true" />
       </div>
@@ -719,7 +724,7 @@ function CapturedResources({ batch, onFocus }: {
     <section className="zhiqu-local-resources">
       <button className="zhiqu-local-resources-toggle" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span>{open ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</span>
-        <strong>查看候选资源</strong>
+        <strong>查看全部</strong>
         <b>{batch.candidates.length}</b>
       </button>
       {open && (
@@ -757,20 +762,20 @@ function DiscoveryControl({ state, updating, disabled, onToggle, onUseCandidates
     <section className="zhiqu-discovery-control">
       <div className="zhiqu-discovery-head">
         <div>
-          <strong>页面自动发现</strong>
+          <strong>自动发现</strong>
           <span>
             {state.enabled
               ? state.count > 0
-                ? `高置信发现 ${state.count} 项 · 与“智能整理”是不同候选路径`
-                : '已开启 · 只在本地监听页面变化'
-              : '关闭时不会在后台扫描页面'}
+                ? `已发现 ${state.count} 项可下载内容`
+                : '已开启'
+              : '未开启'}
           </span>
         </div>
         <button
           type="button"
           className={`zhiqu-switch ${state.enabled ? 'active' : ''}`}
           aria-pressed={state.enabled}
-          aria-label={state.enabled ? '关闭页面自动发现' : '开启页面自动发现'}
+          aria-label={state.enabled ? '关闭自动发现' : '开启自动发现'}
           disabled={disabled || updating}
           onClick={onToggle}
         >
@@ -780,10 +785,10 @@ function DiscoveryControl({ state, updating, disabled, onToggle, onUseCandidates
 
       {state.enabled && state.count > 0 && (
         <div className="zhiqu-discovery-body">
-          <div className="zhiqu-capture-summary">{discoverySummary(state)}</div>
+          {discoverySummary(state) && <div className="zhiqu-capture-summary">{discoverySummary(state)}</div>}
           <button className="zhiqu-local-resources-toggle" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
             <span>{open ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</span>
-            <strong>查看自动发现资源</strong>
+            <strong>查看全部</strong>
             <b>{state.count}</b>
           </button>
           {open && (
@@ -800,7 +805,7 @@ function DiscoveryControl({ state, updating, disabled, onToggle, onUseCandidates
             </div>
           )}
           <button className="zhiqu-discovery-use" type="button" onClick={onUseCandidates} disabled={disabled}>
-            使用这批资源
+            智能整理
           </button>
         </div>
       )}
@@ -854,7 +859,7 @@ function HiddenResources({ items, confirmedIds, onToggle }: {
       </button>
       {open && (
         <div className="zhiqu-group-body">
-          <p className="zhiqu-muted-help">这些资源默认被忽略。需要时仍可以手动选择。</p>
+          <p className="zhiqu-muted-help">这些资源默认未选中，需要时可以手动添加。</p>
           {items.map((item) => (
             <ResourceChoice
               key={item.item_id}
@@ -895,29 +900,15 @@ function ResourceChoice({ item, checked, recommendation, emphasized = false, onT
 
 function statusCopy(status: Status) {
   if (status === 'selecting') {
-    return { title: '在网页上框选资源区域', description: '拖拽覆盖你关心的下载项，松开后只做本地查找。' };
+    return { title: '框选下载区域', description: '拖拽覆盖你关心的下载内容。' };
   }
   if (status === 'scanning') {
-    return { title: '正在查找可下载资源', description: '只在本地查看页面，不会使用智能分析。' };
+    return { title: '正在查找可下载内容', description: '正在读取当前页面。' };
   }
   if (status === 'error') {
-    return { title: '当前页面的下载资源', description: '可以重新智能整理、框选区域，或整理整个网页。' };
+    return { title: '当前页面的下载资源', description: '可以重新整理、框选区域或整理整个网页。' };
   }
-  return { title: '当前页面的下载资源', description: '先在本地查找资源，需要推荐时再进行智能分析。' };
-}
-
-function capturePathTitle(batch: CaptureBatch): string {
-  if (batch.trigger === 'rectangle') return '框选结果';
-  if (batch.metadata?.automatic_scan === 'persistent_discovery_visible_high_confidence') return '自动发现候选';
-  if (isFullPageBatch(batch)) return '整个网页候选';
-  return '当前页扫描结果';
-}
-
-function capturePathDescription(batch: CaptureBatch): string {
-  if (batch.trigger === 'rectangle') return '来自你框选的区域。先查看资源，需要推荐时再智能分析。';
-  if (batch.metadata?.automatic_scan === 'persistent_discovery_visible_high_confidence') return '来自页面自动发现的高置信资源。它和主动扫描可能不同。';
-  if (isFullPageBatch(batch)) return '来自整个网页，适合版本很多、需要上下滚动的下载页。分析仍由你手动开始。';
-  return '来自当前可见页面的主动扫描。先查看资源，需要推荐时再智能分析。';
+  return { title: '当前页面的下载资源', description: '扫描页面或框选区域，找到要下载的内容。' };
 }
 
 function isFullPageBatch(batch: CaptureBatch): boolean {
@@ -933,29 +924,27 @@ function captureSummary(batch: CaptureBatch): string {
   }, {});
   const labels: Array<[string, string]> = [
     ['file', '文件'],
-    ['media', '媒体'],
-    ['magnet', 'Magnet'],
+    ['media', '视频/音频'],
     ['image', '图片'],
-    ['page', '页面'],
-    ['unknown', '其他']
+    ['magnet', '磁力链接']
   ];
   const summary = labels
     .filter(([key]) => counts[key])
     .map(([key, label]) => `${label} ${counts[key]}`)
     .join(' · ');
+  if (!summary) return '';
   return isFullPageBatch(batch) && batch.candidates.length >= 160
-    ? `${summary} · 已达到单次候选上限`
+    ? `${summary} · 已达到单次上限`
     : summary;
 }
 
 function discoverySummary(state: DiscoveryState): string {
   const parts = [
     state.fileCount ? `文件 ${state.fileCount}` : null,
-    state.mediaCount ? `媒体 ${state.mediaCount}` : null,
-    state.magnetCount ? `Magnet ${state.magnetCount}` : null,
-    state.entryCount ? `入口 ${state.entryCount}` : null
+    state.mediaCount ? `视频/音频 ${state.mediaCount}` : null,
+    state.magnetCount ? `磁力链接 ${state.magnetCount}` : null
   ].filter(Boolean);
-  return parts.join(' · ') || `${state.count} 项`;
+  return parts.join(' · ');
 }
 
 function candidateLabel(candidate: CapturedCandidate): string {
@@ -986,7 +975,6 @@ function candidateMeta(candidate: CapturedCandidate): string {
     extension ? extension.toUpperCase() : null
   ].filter(Boolean);
   if (candidate.candidate_type === 'page') parts.push('下载入口');
-  if (candidate.candidate_type === 'unknown') parts.push('待识别');
   return parts.join(' · ') || '当前页面';
 }
 
@@ -996,7 +984,7 @@ function candidateKindLabel(candidate: CapturedCandidate): string {
   if (candidate.candidate_type === 'image') return '图片';
   if (candidate.candidate_type === 'file') return '文件';
   if (candidate.candidate_type === 'page') return '入口';
-  return '待识别';
+  return '资源';
 }
 
 function discoveryKindLabel(kind: DiscoveryKind): string {

@@ -2,97 +2,149 @@
 
 > 单编排器、双智能节点、确定性执行的闭环资源交付 Agent。
 
-本仓库以 `docs/blueprint/xunlei-zhiqu-v0.4.md` 与 `docs/blueprint/E0.md` 为产品与架构事实来源。Browser Extension、Runtime、Task Center 保持逻辑解耦；部署可以从本地 Demo 迁移到迅雷客户端 / 服务端，但不会把产品扩张成通用聊天助手、通用爬虫或纯链接下载器。
+产品与架构事实来源：`docs/blueprint/xunlei-zhiqu-v0.4.md`、`docs/blueprint/E0.md` 和 `docs/adr/`。Browser Extension、Runtime、Task Center 保持逻辑解耦；当前本地 Demo 可以迁移到迅雷客户端 / 服务端部署，而不把产品扩张成通用聊天助手或通用爬虫。
 
 ## 开发进度
 
-- **Stage A：已完成** — Monorepo、三端骨架、配置与 ModelProviderAdapter。
-- **Stage B：已完成** — 迅雷 17 风格任务中心、ResourceJob、云盘交付差异、链接库。
-- **Stage C：已完成核心验证** — 真实框选、多通道候选融合、真实节点 A、Sanitized EvidencePack、ResourcePlan 映射回网页、用户最终确认。
-- **Stage D：已完成** — 常驻发现、Resource Extension Registry、全 DOM 强信号、Network Media、批量图片、EvidenceReducer、缓存、模型供应商适配和细粒度 HTTP trace。
-- **Stage E0：已完成** — Wave A Architecture Seam、Wave B Node A Performance、Wave C Progressive Analysis UX，覆盖 **E0.1~E0.22**。
-- **Stage E：尚未进入** — 下一阶段才接真实 DownloadExecutor、真实进度、暂停/恢复/Range 与轻量持久化。
+- **Stage A~D：已完成** — 三端骨架、任务中心、真实框选/扫描、候选融合、Node A、ResourcePlan、自动发现、媒体/图片发现、EvidenceReducer、缓存和供应商适配。
+- **Stage E0：已完成** — 架构迁移接缝、Node A 性能基线、Progressive Analysis UX（E0.1~E0.22）。
+- **Stage E / Wave A：已完成实现，待真实页面验收** — asset-aware execution plan、真实 HTTP/HTTPS 文件下载、真实进度/速度/ETA、当前进程内 pause/resume、真实 cancel、`.part -> final`。
+- **Stage E 后续：未进入** — Runtime 重启恢复、HTTP Range、持久化和更完整的执行前检查。
+- **Stage F：未进入** — Node B、Diagnosis、来源恢复与可信 source switching。
 
 ## 当前架构
 
 ```text
 Browser Extension
   -> ZhiquServiceClient
-     -> CapabilityResolver / AnalysisCredential
-     -> LocalHttpTransport (Demo)
-     -> future ClientTransport / CloudAnalysisTransport
+     -> LocalHttpTransport / future client-or-cloud transport
                 |
                 v
              Runtime
           /      |       \
          v       v        v
-ModelProviderAdapter   DownloadExecutorPort   ResourceJob
-(ModelGatewayPort)     (Noop in E0)           / Agent state
-         |
-         v
-StructuredChatProvider
-         |
-         v
-ProviderApiAdapter
-  -> DashScope / OpenAI / Generic
+ModelProviderAdapter   ResourceJob   DownloadExecutorPort
+         |                              |
+ProviderApiAdapter                     +-- HttpDownloadExecutor   # Stage E-A real local path
+  -> DashScope/OpenAI/Generic          +-- NoopDownloadExecutor   # fixture/fallback
+                                        `-- future XunleiDownloadExecutor
 
 Task Center
   -> TaskServiceClient
-     -> HttpTaskServiceClient (Demo)
-     -> future Client WebView / Native bridge
+     -> HttpTaskServiceClient / future client bridge
 ```
 
 关键边界：
 
-- Extension 产品组件不拼 Runtime URL 或 `/v1/*`；Demo HTTP 细节属于 `LocalHttpTransport`。
-- Task Center 页面不直接 `fetch` Runtime；路由、endpoint、session header 属于 `HttpTaskServiceClient`。
-- `ZhiquCapabilities` 描述部署形态能力，`AnalysisCredential` 描述当前会话是否允许智能分析，两者分离。
-- 完整 Agent / ResourceJob 的长期主体属于迅雷客户端 Runtime；无客户端 cloud fallback 只做 Node A，不复制完整下载状态机。
-- `CaptureBatch != CloudAnalysisRequest`；真实下载 URL、页面 URL、Cookie、Authorization、临时 token、本地路径、完整 HTML、无关整页正文不会进入未来 cloud analysis contract。
-- Runtime 只认 `ModelProviderAdapter` 这一 ModelGatewayPort 语义边界；供应商方言由 `ProviderApiAdapter` 隔离。
-- 下载执行只经过 `DownloadExecutorPort`；E0 仍使用 `NoopDownloadExecutor`，不会下载真实字节。
-- Runtime HTTP 已有 `X-Zhiqu-Session` 接缝；默认 `RUNTIME_AUTH_MODE=off` 保持 Demo，`static_token` 只做开发验证。
+- Extension 和 Task Center 的产品组件不拼 Runtime URL 或 `/v1/*`；HTTP 细节属于各自 transport/client。
+- `CaptureBatch != CloudAnalysisRequest`；真实 URL、页面 URL、Cookie/Authorization、临时 token、本地路径、完整 HTML 不会自动进入未来云分析。
+- Runtime 通过 `ModelProviderAdapter` 隔离模型供应商，通过 `DownloadExecutorPort` 隔离具体下载引擎。
+- 本地真实任务的执行事实来自 DownloadExecutor；JobStore 保存任务元数据和用户目标。
+- Cloud delivery 当前仍是 Demo，不会因为 Stage E-A 被错误下载到本地。
 
-详细决策：
+详细决策见 `docs/adr/0001-runtime-boundaries-and-model-adapters.md` 和 `docs/adr/0002-client-runtime-cloud-analysis-and-service-ports.md`。
 
-- `docs/adr/0001-runtime-boundaries-and-model-adapters.md`
-- `docs/adr/0002-client-runtime-cloud-analysis-and-service-ports.md`
+## Stage E-A：真实 HTTP 下载
 
-## Wave A — Architecture Seam（E0.1~E0.9）
+### 执行身份
 
-Wave A 已冻结可迁移边界：
-
-- `ZhiquServiceClient` + `LocalHttpTransport`；
-- Capability Resolver；
-- `AnalysisCredential`；
-- `CloudAnalysisRequest` 隐私边界；
-- `TaskServiceClient`；
-- ADR 0002；
-- `DownloadExecutorPort`；
-- `ModelProviderAdapter` 作为 ModelGatewayPort；
-- Runtime client-session seam。
-
-当前 capability fixture：
+不再使用：
 
 ```text
-demo_local | client_runtime | cloud_analysis | local_only
+ResourceJob -> flat URL[]
 ```
 
-当前 AnalysisCredential fixture：
+现在是：
 
 ```text
-demo | anonymous | client_session | web_session | guest_trial | none
+ResourceJob
+  -> DownloadExecutionRequest
+     -> DownloadExecutionAsset[]
+        -> primary_source
+        -> alternate_sources[]
 ```
 
-这些只是 E0 能力/身份 fixture，不代表真实 Native Messaging、Cloud Runtime 或迅雷账号体系已经实现。
+`ResourceJob` 是用户想完成的资源目标；`DownloadExecutionAsset` 是真正需要落盘的一个逻辑文件；Source 是这个文件的一个地址。
 
-## Wave B — Node A Performance（E0.10~E0.15）
+多个 candidate 只有在已有确定性证据证明同一资源时才归为一个 Asset，目前包括：
 
-Wave B 建立了真实 TTFT / generation / total 测量、供应商 SSE 归一化、固定脱敏 benchmark、model/provider/profile A/B、connection reuse / HTTP2 观测，以及独立 `pipeline_v3`。
+- `normalized_key` 相同；
+- canonical URL 相同。
 
-### 推荐稳定配置
+PlanItem 同时引用多个 candidate 并不自动表示它们互为镜像。不同 identity 会成为不同 Asset。手工新建的不同 URL 默认也是不同 Asset，仅 canonical URL 完全相同时去重。
 
-当前真实 benchmark 验证的稳定组合：
+### HttpDownloadExecutor
+
+Stage E-A 本地 `delivery_target=local` 默认使用真实 `HttpDownloadExecutor`：
+
+```text
+GET primary_source
+-> follow redirect
+-> Content-Disposition / final URL / filename_hint 选择文件名
+-> filename sanitization + duplicate-safe naming
+-> <filename>.part
+-> streaming raw response bytes
+-> 更新真实 downloaded bytes / speed / ETA
+-> Content-Length 最小完成检查（若可用）
+-> atomic .part -> final file
+```
+
+一个 Job 内多个 Asset 顺序下载，不并发、不分块。
+
+当前支持普通 HTTP/HTTPS 文件型直链，例如 ZIP/EXE/MSI/PDF/直接 MP4 等。Stage E-A 明确不执行 Magnet/BT、HLS/DASH manifest、blob、FTP、aria2/qBittorrent/P2P。无可执行 Asset 时直接返回清楚错误，不创建假下载任务。
+
+备用 source 会保存在对应 `asset_id` 下，但本 Wave 不自动 failover；主来源失败后任务进入 `waiting_for_source`，交给后续 Stage F。
+
+### Pause / Resume / Cancel
+
+Pause/Resume 只承诺当前 Runtime 进程仍存活：下载循环通过 cooperative `asyncio.Event` gate 停止/继续消费网络流。长时间暂停导致服务器断开时会如实失败，本 Wave不伪造 Range 续传。
+
+Cancel 顺序是：
+
+```text
+cancel asyncio task
+-> 关闭当前 HTTP response
+-> 停止写盘
+-> 删除当前 .part
+-> 删除 ResourceJob
+```
+
+Runtime shutdown 与用户 Cancel 不同：shutdown 会停 background task 和 HTTP connection，但保留 `.part`，供后续恢复 Wave 使用。
+
+### 状态事实来源
+
+`execution_mode=download_engine` 的真实任务永远不会进入 `_advance_demo_job()`。
+
+GET `/v1/jobs` 和 `/v1/jobs/{job_id}` 会用 Executor 的真实状态投影到现有 `ResourceJobSnapshot`：
+
+```text
+queued      -> planning
+downloading -> downloading
+paused      -> paused
+completed   -> completed
+failed      -> waiting_for_source
+```
+
+公开 schema 未重做；现有 `progress / downloaded_bytes / total_bytes / speed_bytes_per_second / eta_seconds / issue / stage_label` 已足够 Task Center 展示真实执行。
+
+Cloud Demo 和显式 `DOWNLOAD_EXECUTOR=noop` 的 fixture 仍可保留旧 Demo 行为。
+
+## Extension 产品文案
+
+Stage E-A 不重做 Side Panel，只做信息减法：
+
+- 扫描结果改为“发现 N 项可下载内容”；
+- 首屏分类只保留文件、视频/音频、图片、磁力链接等用户有意义的类别；
+- “候选资源 / 来自当前可见页面 / 使用这批资源”等工程表达已移除；
+- 页面推荐标注不再显示绿色解释卡，只保留“定位到网页”；
+- 推荐 tag 使用“适合当前电脑 / 兼容性更好 / 优先清晰度 / 体积更小”，不展示 raw reason 或 `os=windows` 一类技术事实；
+- 创建任务后只短暂提示“已创建下载任务”，主按钮变为“打开任务中心”。
+
+Task Center 保持原布局，通过现有轮询显示真实 bytes/speed/ETA，并在本地未完成任务详情提供真实“取消任务”。
+
+## Node A 稳定配置
+
+Stage E 不继续优化 Node A。当前已 benchmark 的推荐组合继续冻结：
 
 ```dotenv
 MODEL_PROVIDER=dashscope
@@ -103,151 +155,7 @@ MODEL_STREAM_DIAGNOSTICS=false
 MODEL_HTTP2_ENABLED=false
 ```
 
-`pipeline` 保留为 v2 回滚档。上述 v3 推荐结论只覆盖已经测试的 DashScope + `deepseek-v4-flash`；换供应商或模型需要重新 benchmark。
-
-固定 Python / JDK / image 的 9 次 HTTP/1.1 A/B：
-
-| 中位数 | pipeline v2 | pipeline v3 | 变化 |
-|---|---:|---:|---:|
-| input tokens | 1348 | 1236 | -8.3% |
-| output tokens | 533 | 459 | -13.9% |
-| TTFT | 906 ms | 862 ms | -4.9% |
-| generation | 5220 ms | 4823 ms | -7.6% |
-| total | 6257 ms | 5637 ms | -9.9% |
-| ResourcePlan validation | 100% | 100% | 持平 |
-
-图片原图偏好补强后又做 5 次 v3 定向复测，5/5 选择原图、5/5 validation；连接复用观测为首请求 `false`、后四次 `true`。
-
-结论：DeepSeek V4 当前主要 latency 在首 token 之后的 generation，而非 Runtime 本地 JSON/Pydantic/guards 或连接握手。Qwen Flash 虽快但 ResourcePlan 质量不足，未进入稳定配置。HTTP/2 能协商成功但没有稳定延迟优势，保持默认关闭。`ResourcePlanCache` 命中路径 lookup 约为 0ms。
-
-## Wave C — Progressive Analysis UX（E0.16~E0.22）
-
-Wave C 把约 5~6 秒真实 Node A 等待变成有信息的渐进体验，而**没有把未校验的模型内容暴露给用户**。
-
-当前流程：
-
-```text
-点击智能分析
-  -> Extension 立即基于 CaptureBatch 做确定性本地资源概览
-  -> 展示无数字动态进度条
-  -> POST /v1/capture/analyze-stream
-  -> Runtime 发语义 phase event
-  -> Provider 内部完整聚合模型 JSON
-  -> normalize + Pydantic
-  -> deterministic guards
-  -> plan_validated
-  -> 完整 ResourcePlan
-  -> Extension 平滑替换为正式推荐
-```
-
-UI 只看到这些语义阶段：
-
-```text
-evidence_ready
-cache_hit
-model_request_started
-model_first_token
-model_completed
-plan_validated
-done
-```
-
-界面不会展示这些技术名，而映射为“准备资源说明 / 正在理解版本区别 / 正在生成推荐 / 正在确认结果”等产品文案。
-
-### 本地预览
-
-点击分析后无需等待模型，Extension 立即依据已有确定性证据展示：
-
-- 当前页面标题；
-- 已发现资源数量；
-- Windows / macOS / Linux；
-- 源码 / 相关附件；
-- 媒体 / 图片 / Magnet。
-
-这里只使用 capture metadata、section heading、extension 和显式平台文字，不执行 Node A 语义推荐，不会假装知道“哪个一定最好”。
-
-### 动态进度
-
-进度条内部使用最近非缓存 Node A 完整耗时的移动中位数做插值：
-
-- 本地阶段立即启动；
-- 模型阶段随历史 latency 平滑推进；
-- 慢请求在约 90% 附近缓慢前进，不倒退；
-- `model_completed / plan_validated` 驱动最后阶段；
-- UI 不显示伪造的数字百分比。
-
-历史只保存在 Extension `chrome.storage.local`，只是 UX hint；读取/写入失败不会影响分析。
-
-### Streaming 安全边界
-
-旧接口继续保留：
-
-```text
-POST /v1/capture/analyze
-```
-
-Progressive UI 使用新增：
-
-```text
-POST /v1/capture/analyze-stream
-Content-Type: application/x-ndjson
-```
-
-模型 token / 半截 JSON 永远留在 Runtime。`LocalHttpTransport` 只解析 Runtime 自己的 phase/result/error NDJSON；最终 `result.plan` 必须已经经过完整 JSON parse、normalizer、Pydantic 和 deterministic guards。
-
-`MODEL_STREAM_DIAGNOSTICS=false` 仍是正常默认值：它控制普通 legacy 调用是否主动进入诊断 streaming；Progressive endpoint 在需要真实 `model_first_token` phase 时会在 Runtime 内部请求 provider streaming，但仍不会把原始 token delta 发给浏览器。
-
-### Cache hit 快速路径
-
-相同 sanitized Evidence + provider namespace 命中 `ResourcePlanCache` 时：
-
-```text
-evidence_ready
--> cache_hit
--> plan_validated
--> done
--> ResourcePlan
-```
-
-完全跳过模型 Provider。没有为了播放动画而设置人为延迟，缓存命中应直接快速替换成结果。
-
-重新智能分析仍使用 `refresh=true`，明确绕过 ResourcePlan cache，便于用户真正要求重新判断。
-
-## Runtime 当前能力
-
-`services/runtime` 当前包含：
-
-- FastAPI Demo Runtime；
-- Sanitized EvidencePack + EvidenceReducer；
-- `quality / fast / wire / wire2 / pipeline / pipeline_v3`；
-- StructuredChatProvider；
-- DashScope / OpenAI / Generic OpenAI-compatible API adapter；
-- TTFT / generation / HTTP trace；
-- deterministic ResourcePlan validation / device guard；
-- bounded in-memory ResourcePlan cache；
-- normal + progressive analyze API；
-- ResourceJob create/list/pause/resume/cancel；
-- Link Library；
-- `DownloadExecutorPort` + Noop executor；
-- `ClientSessionAuthPort` + off/static-token fixture。
-
-当前 Job Store 仍为进程内 Demo 状态。
-
-## Extension 当前能力
-
-`apps/extension` 当前包含：
-
-- Chrome / Edge Manifest V3 Side Panel；
-- 真实矩形框选；
-- DOM href、纯文本 URL/Magnet、video/audio/source、Network Media 多通道融合；
-- 当前页、框选、整页三种主动扫描；
-- 页面自动发现 + MutationObserver；
-- M3U8 / DASH / 独立媒体网络发现；
-- 批量图片；
-- 本地候选列表；
-- Progressive Analysis UX；
-- ResourcePlan 映射回网页；
-- 用户可修改最终推荐，再创建 ResourceJob。
+`pipeline` 保留为 v2 rollback profile。
 
 ## 本地配置
 
@@ -259,7 +167,7 @@ uv sync --project services/runtime
 Copy-Item .env.example .env
 ```
 
-模型 Key 只允许存在 Runtime `.env`。DashScope Demo 推荐：
+Runtime `.env` 示例：
 
 ```dotenv
 MODEL_PROVIDER=dashscope
@@ -268,20 +176,20 @@ MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MODEL_NAME=deepseek-v4-flash
 MODEL_API_KEY=your-local-runtime-key
 NODE_A_PROFILE=pipeline_v3
-
-MODEL_CONNECT_TIMEOUT_SECONDS=10
-MODEL_READ_TIMEOUT_SECONDS=120
-MODEL_WRITE_TIMEOUT_SECONDS=30
-MODEL_MAX_COMPLETION_TOKENS=4096
 MODEL_STREAM_DIAGNOSTICS=false
 MODEL_HTTP2_ENABLED=false
 
 PLAN_CACHE_TTL_SECONDS=1200
 PLAN_CACHE_MAX_ENTRIES=64
+
+DOWNLOAD_EXECUTOR=http
+# 留空默认 ~/Downloads/迅雷智取；真实大文件测试建议显式设置。
+DOWNLOAD_DIRECTORY=
+
 RUNTIME_AUTH_MODE=off
 ```
 
-Extension 开发 fixture（`apps/extension/.env.local`）：
+Extension 开发 fixture (`apps/extension/.env.local`)：
 
 ```dotenv
 VITE_RUNTIME_URL=http://127.0.0.1:8765
@@ -290,7 +198,7 @@ VITE_ZHIQU_ANALYSIS_CREDENTIAL=demo
 VITE_RUNTIME_SESSION=
 ```
 
-## 开发启动
+## 启动
 
 Runtime：
 
@@ -298,59 +206,70 @@ Runtime：
 uv run --project services/runtime uvicorn xunlei_zhiqu_runtime.main:app --app-dir services/runtime/src --reload --host 127.0.0.1 --port 8765
 ```
 
-Task Center：
+Task Center 开发模式：
 
 ```powershell
 corepack pnpm --filter @xunlei-zhiqu/task-center dev
 ```
 
-Extension 构建：
+Extension 构建并旁加载 `apps/extension/dist`：
 
 ```powershell
 corepack pnpm --filter @xunlei-zhiqu/extension build
 ```
 
-Chrome / Edge 旁加载目录：
-
-```text
-apps/extension/dist
-```
-
-## E0 收口验证
+## Stage E-A 自动检查
 
 ```powershell
-git pull --rebase origin main
-
 corepack pnpm typecheck
+
+Remove-Item -Recurse -Force .\apps\extension\dist -ErrorAction SilentlyContinue
 corepack pnpm --filter @xunlei-zhiqu/extension build
 corepack pnpm --filter @xunlei-zhiqu/task-center build
 Select-String -Path .\apps\extension\dist\content.js -Pattern '^\s*import'
 
 uv run --project services/runtime python -m compileall services/runtime/src
 uv run --project services/runtime pytest `
-  services/runtime/tests/test_capture_analyze.py `
   services/runtime/tests/test_e0_architecture_seams.py `
-  services/runtime/tests/test_e0_progressive_analysis.py `
+  services/runtime/tests/test_stage_e_download_execution.py `
   -q
-
-node --experimental-strip-types scripts/check_e0_cloud_privacy.mts
 ```
 
-`Select-String` 必须无输出，继续保护 MV3 `content.js` 自包含约束。
+`Select-String` 必须无输出。
 
-人工验收只需要真实主链路：扫描一个版本较多的下载页 → 点击智能分析 → 立即看到本地概览和动态进度 → phase 文案自然推进 → 最终完整推荐平滑出现 → 创建任务 / 打开任务中心；再对相同 Evidence 做一次普通分析确认 cache hit 快速路径，对“重新智能分析”确认仍然绕过缓存。
+Stage E 测试重点保护：ExecutionAsset 分组、未确认资源不执行、Manual URL identity、非 HTTP/manifest 拒绝、真实 `.part` 写入、pause/resume、cancel 删除 `.part`、以及 real Job 不进入 Demo progress。
 
-## E0 之后仍然不做
+## Stage E-A 真实验收
 
-在明确进入 Stage E 之前，当前仍不实现：
+建议先把下载目录设到容易观察的位置：
 
-- 真实 HTTP Download Engine / Range；
-- BT / Magnet 下载执行；
-- SQLite / 完整 ResourceGraph / EventLog；
-- 完整 Node B / 一键续取；
-- 真正 Cloud Analysis Service / 迅雷 AI Gateway；
-- 第二套完整 Cloud Runtime；
-- 真正 Native Messaging；
-- 迅雷账号登录 / OAuth / 会员系统；
-- 视觉模型；
-- 微服务、Kafka、Redis。
+```dotenv
+DOWNLOAD_EXECUTOR=http
+DOWNLOAD_DIRECTORY=C:\Users\<you>\Downloads\迅雷智取
+```
+
+重启 Runtime 后，走真实 Python/JDK 页面：
+
+```text
+扫描 / 框选
+-> 智能分析
+-> 确认推荐文件
+-> 保存到“本地”
+-> 开始下载
+-> 打开任务中心
+```
+
+应看到真实磁盘变化：
+
+```text
+<filename>.part        # 下载中持续增长
+<filename>             # 正常完成后原子替换
+```
+
+Task Center 应显示来自 Runtime Executor 的真实 `downloaded bytes / total / speed / ETA / progress`。暂停后 `.part` 停止增长且 speed=0；同一 Runtime 进程中恢复后继续增长；取消一个新任务后网络停止、`.part` 删除、任务移除；完成后 `.part` 消失且任务显示 100%。
+
+可用一个故意返回 404 的 HTTP URL确认任务进入 `waiting_for_source`，但本 Wave不要继续做换源或 Node B。
+
+## 明确留给后续 Wave / Stage F
+
+本 Wave没有实现：SQLite/JobStore 持久化、Runtime 重启恢复、HTTP Range 断点续传、完整 Preflight、磁盘空间检查体系、完整 hash 校验、自动 source failover、Node B/Diagnosis/一键续取、Magnet/BT、HLS/DASH 编排、aria2/qBittorrent/P2P、多连接分块、WebSocket/下载事件总线。

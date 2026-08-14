@@ -1,124 +1,150 @@
 # ADR 0002: Client Runtime, cloud analysis, and service ports
 
-Status: accepted for Stage E0
+Status: accepted; Stage E-A execution seam implemented
 
 ## Context
 
-Stage D proved the current Demo path:
+Stage D/E0 proved and then decoupled the Demo path:
 
 ```text
-Browser Extension -> localhost FastAPI Runtime -> Task Center
+Browser Extension -> Runtime -> Task Center
 ```
 
-The production product must later move the long-lived Agent into the 迅雷 client without rewriting Node A, ResourceJob orchestration or frontend product logic. At the same time, a user without the client may still be allowed to obtain a Node-A ResourcePlan through a cloud analysis service.
+The long-lived Agent must remain movable into the 迅雷 client without rewriting Node A, ResourceJob orchestration or frontend product logic. A no-client cloud fallback may still provide Node-A analysis, but must not become a second owner of local disk/download state.
 
-A naive migration would couple UI code to endpoint discovery, upload the existing `CaptureBatch` to a cloud Runtime, or bind the Runtime directly to one model supplier and one download implementation. Stage E0 freezes replacement seams before real file execution begins.
+Stage E-A is the first point where that architecture performs real filesystem I/O, so the download boundary also needs a precise execution identity model.
 
 ## Decision
 
 ### Full Agent lives in the client Runtime
 
-The long-term owner of ResourceJob state is the 迅雷 client Runtime:
+The long-term owner of ResourceJob and local execution state is the 迅雷 client Runtime:
 
 ```text
 Extension
   -> ZhiquServiceClient
      -> Client Runtime
-        -> ResourceDeliveryAgent / ResourceJob
-        -> ModelGatewayPort
+        -> ResourceJob / Agent
+        -> ModelProviderAdapter
         -> DownloadExecutorPort
 ```
 
-The current FastAPI process is the Demo deployment of that Runtime. Runtime hosting the Task Center static bundle remains a convenience, not a logical dependency.
+The current FastAPI process is the local Demo deployment of that Runtime. Runtime hosting the Task Center static bundle is a convenience, not a logical dependency.
 
 ### Cloud fallback is analysis only
 
-No-client fallback is:
+No-client fallback remains:
 
 ```text
 Extension -> CloudAnalysisTransport -> Cloud Analysis Service -> AI Gateway
 ```
 
-It returns a validated Node-A `ResourcePlan`. It does not own a second copy of the local ResourceJob state machine, disk state, download progress, pause/resume state, recovery state or Download Engine.
+It may return a validated Node-A `ResourcePlan`; it does not own local disk state, download progress, pause/resume, recovery state or a Download Engine.
 
-`CaptureBatch` is therefore **not** the cloud request contract. The explicit `CloudAnalysisRequest` contains only sanitized candidate semantics and safe technical facts. Raw resource URLs, page URLs, cookies, Authorization material, temporary tokens, local paths, full HTML and unrelated page text are excluded before a cloud transport can exist.
-
-### Analysis eligibility is separate from deployment
-
-`ZhiquCapabilities` describes what the current product shape can do. `AnalysisCredential` describes the logical right to use intelligent analysis. They are independent concepts.
-
-A credential can eventually be backed by a client login session, web account session or guest trial token. Stage E0 only provides logical fixture kinds; the public analysis payload does not carry a model-provider API key or raw account token.
+`CaptureBatch` is not the cloud request contract. `CloudAnalysisRequest` excludes raw resource URLs, page URLs, cookies, Authorization material, temporary tokens, local paths, full HTML and unrelated page text before any cloud transport exists.
 
 ### Frontend service boundaries
 
-Browser Extension product code depends on `ZhiquServiceClient`, not localhost or `/v1/*` routes. The current `LocalHttpTransport` owns Demo HTTP details.
+Extension product code depends on `ZhiquServiceClient`; current HTTP details remain in `LocalHttpTransport`.
 
-Task Center product code depends on `TaskServiceClient` and public `ResourceJobSnapshot` / action semantics. The current `HttpTaskServiceClient` owns Runtime endpoint, routes and optional session header. A future client WebView bridge or native IPC implementation can replace this transport without changing the Task Center pages.
+Task Center product code depends on `TaskServiceClient` and public `ResourceJobSnapshot`; current HTTP details remain in `HttpTaskServiceClient`. A future client WebView/native bridge can replace either transport without rewriting product pages.
 
 ### Model boundary
 
-`ModelGatewayPort` is the Runtime semantic boundary rather than a second parallel class hierarchy. The existing, already-used `ModelProviderAdapter` is the current implementation of that semantic port; the provider-neutral stack from ADR 0001 remains intact.
+The existing `ModelProviderAdapter` is the Runtime's ModelGatewayPort semantic boundary. Provider dialects remain behind `ProviderApiAdapter`; Runtime orchestration does not branch on DeepSeek, Qwen, OpenAI or supplier hostnames.
 
-Production can later add an `XunleiGatewayProviderAdapter` without making CaptureAnalyzer branch on Qwen, DeepSeek, OpenAI or any supplier hostname.
+A future 迅雷 AI Gateway may centralize identity, quota, routing, fallback, shared cache/prompt policy and cost/latency telemetry. Provider-facing egress should be benchmarked for regional proximity rather than assumed.
 
-### Model Gateway proximity principle
+### Asset-aware download boundary
 
-A future 迅雷 AI Gateway should be placed and routed with model-provider proximity in mind. The intended production path is:
-
-```text
-Client Runtime
-  -> 迅雷 AI Gateway
-     -> regional/provider egress
-        -> model supplier
-```
-
-The Gateway is the right place for account identity and entitlement, quota/rate limiting, model routing and fallback, shared prompt/cache policy, prompt-version control and cost/latency telemetry. When possible, its provider-facing egress should be regionally close to the selected model supplier so the Gateway does not add an avoidable second long WAN leg.
-
-This does **not** imply that a Gateway can remove the user's Client -> Gateway WAN latency, nor that client-observed TTFT can be labeled as pure model compute. Stage E0 only records the deployment principle; it does not implement a cloud Gateway.
-
-### Download boundary
-
-ResourceJob execution calls `DownloadExecutorPort`:
+Stage E-A freezes this internal execution identity:
 
 ```text
-create / pause / resume / cancel / status / add_source
+ResourceJob
+  -> DownloadExecutionRequest
+     -> DownloadExecutionAsset[]
+        -> primary_source
+        -> alternate_sources[]
 ```
 
-`create` receives a Runtime-internal `DownloadExecutionRequest` containing the public job snapshot plus the confirmed source values needed by a real executor. Those raw sources never become fields on `ResourceJobSnapshot` and never cross the cloud-analysis privacy boundary.
+Semantics are:
 
-Stage E0 wires a `NoopDownloadExecutor` so current Demo behavior remains unchanged. Stage E can replace it with a real Demo HTTP executor, and a production client can replace that with `XunleiDownloadExecutor`, without moving execution logic into the Agent or UI.
+- `ResourceJob` = the user's desired resource goal;
+- `DownloadExecutionAsset` = one logical file that must be materialized;
+- source = one address for that specific logical file.
+
+The execution compiler is deterministic. Candidates become sources of one asset only when existing capture evidence proves identity, currently the same `normalized_key` or the same canonical URL. Multiple candidate IDs in one model `PlanItem` do **not** by themselves imply mirrors. Distinct identities become distinct assets and are downloaded sequentially.
+
+Manual links are likewise separate assets unless their canonical URLs are identical.
+
+Raw source values remain Runtime-internal. They are not added to public `ResourceJobSnapshot` and do not cross `CloudAnalysisRequest`.
+
+### DownloadExecutorPort
+
+The port is:
+
+```text
+create(request)
+pause(job_id)
+resume(job_id)
+cancel(job_id)
+status(job_id)
+add_source(job_id, asset_id, source)
+```
+
+`add_source` is asset-aware so a future recovery controller can attach a newly discovered source to the correct logical file. Stage E-A stores alternate sources but deliberately does not auto-switch to them.
+
+Current adapters:
+
+- `HttpDownloadExecutor`: real Stage E-A local HTTP/HTTPS execution;
+- `NoopDownloadExecutor`: fixture/fallback only;
+- future `XunleiDownloadExecutor`: production client integration seam.
+
+`HttpDownloadExecutor` is intentionally small: sequential files, streaming response body to `.part`, filename sanitization, duplicate-safe names, live bytes/speed/ETA, in-process cooperative pause/resume, real cancel, and atomic `.part -> final` on successful completion. It is not a reimplementation of the 迅雷 download engine.
+
+Unsupported Stage E-A protocols include Magnet/BT, HLS/DASH orchestration, blob, FTP and external download engines. A local job with no executable HTTP/HTTPS asset fails clearly rather than entering fake progress.
+
+### Execution status truth
+
+For `execution_mode=download_engine`:
+
+```text
+JobStore = job metadata / user goal
+DownloadExecutor = current execution truth
+```
+
+GET job APIs project executor status onto the existing public `ResourceJobSnapshot`. Real jobs never enter the old Demo progress advancement path.
+
+Cloud Demo tasks and explicit `DOWNLOAD_EXECUTOR=noop` fixtures may continue using Demo behavior.
+
+### Runtime shutdown and cancel are different
+
+User cancel first cancels the background task/network response and deletes the current `.part`, then removes the ResourceJob.
+
+Runtime shutdown cancels background work and closes HTTP connections but does **not** delete `.part`; restart recovery is deliberately deferred.
 
 ### Runtime client-session seam
 
-Before Stage E writes real files, Runtime HTTP clients need one place to attach client authentication. The shared seam is `X-Zhiqu-Session`.
-
-Current modes are intentionally small:
-
-- `off`: default Demo behavior;
-- `static_token`: development verification of the authenticated localhost seam.
-
-The Extension transport and Task Center HTTP client can attach the header uniformly. Runtime validates it through `ClientSessionAuthPort`. This is not OAuth and is not a production account service.
-
-`VITE_RUNTIME_SESSION` exists only as a development fixture for the static-token mode. A production session must be provisioned dynamically by the client/native bridge or authenticated localhost handshake; it must not become a permanent build-time secret in frontend bundles.
-
-A future client may establish the session through Chrome Native Messaging or authenticated localhost IPC. This ADR deliberately does not choose between those transports yet.
+`X-Zhiqu-Session` remains the common authenticated-localhost seam. Current `off` and `static_token` modes are development shapes, not production account infrastructure.
 
 ## Consequences
 
-- Moving the full Agent into the 迅雷 client is primarily a deployment/adapter change, not a rewrite of product logic.
-- Cloud analysis cannot accidentally inherit the privacy properties of local `CaptureBatch`; it must cross an explicit sanitizer contract.
-- Task Center no longer assumes it is talking directly to localhost HTTP from page components.
-- Node A model suppliers and the future 迅雷 AI Gateway remain behind one Runtime semantic port.
-- A production AI Gateway can centralize identity/routing/cache/cost policy without forcing supplier logic back into Runtime; regional provider egress should be benchmarked rather than assumed.
-- Real download execution can begin in Stage E behind a frozen port while keeping raw sources Runtime-internal.
-- Client-session authentication can be enabled without editing every React request call.
+- Moving the full Agent into the 迅雷 client remains an adapter/deployment change rather than a product rewrite.
+- Real local file execution now fits behind the same DownloadExecutorPort that production can replace.
+- Execution identity no longer collapses an unordered list of URLs into ambiguous download semantics.
+- Source recovery has a stable `asset_id` target without introducing Node B in Stage E-A.
+- Public ResourceJob contracts remain unchanged while real bytes/speed/ETA come from the executor.
+- Cloud analysis retains its privacy boundary and cloud Demo delivery is not accidentally routed to local disk.
 
 ## Deliberately deferred
 
-- real Chrome Native Messaging;
-- real 迅雷 account login, OAuth, membership or entitlement service;
-- real Cloud Analysis endpoint and AI Gateway;
-- a second full cloud Runtime;
-- real HTTP/BT/Magnet download execution, Range and persistence;
-- Node B and complete reacquisition;
-- microservices, Redis, Kafka or distributed queues.
+- Native Messaging and production account/session infrastructure;
+- real Cloud Analysis endpoint / AI Gateway;
+- SQLite or other persistent Job Store;
+- Runtime restart recovery and HTTP Range resume;
+- full preflight / disk-space subsystem / full content verification;
+- automatic alternate-source switching;
+- Node B / Diagnosis Controller / one-click reacquisition;
+- Magnet/BT, HLS/DASH orchestration, aria2/qBittorrent/P2P;
+- multi-connection segmented downloads;
+- WebSocket/download event bus.

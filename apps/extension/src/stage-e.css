@@ -1,0 +1,26 @@
+.zhiqu-locate-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 0 0;
+}
+
+.zhiqu-locate-row button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  color: #176bd3;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.zhiqu-locate-row button:hover { background: #f2f7ff; }
+
+.zhiqu-task-notice {
+  grid-template-columns: 18px minmax(0, 1fr);
+}

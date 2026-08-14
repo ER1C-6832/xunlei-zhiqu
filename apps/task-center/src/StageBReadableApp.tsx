@@ -279,7 +279,7 @@ export function StageBReadableApp() {
       return;
     }
     if (job.status === 'waiting_for_source') {
-      setToast({ message: '一键续取入口已保留，真实重新智取在阶段 F 接入。', tone: 'warning' });
+      setToast({ message: '当前来源不可用，重新智取将在阶段 F 接入。', tone: 'warning' });
       return;
     }
     if (job.status === 'completed') {
@@ -296,6 +296,22 @@ export function StageBReadableApp() {
       setToast({ message: operation === 'pause' ? '任务已暂停' : '任务已恢复' });
     } catch (error) {
       setToast({ message: error instanceof Error ? error.message : '任务操作失败', tone: 'warning' });
+    } finally {
+      setActionJobId(null);
+    }
+  }
+
+  async function handleCancelJob(job: ResourceJobSnapshot) {
+    if (job.delivery_target === 'cloud' || job.status === 'completed') return;
+    setActionJobId(job.job_id);
+    try {
+      await taskService.cancelJob(job.job_id);
+      setJobs((current) => current.filter((item) => item.job_id !== job.job_id));
+      setSelectedId((current) => current === job.job_id ? '' : current);
+      setToast({ message: '任务已取消' });
+      void syncData();
+    } catch (error) {
+      setToast({ message: error instanceof Error ? error.message : '取消任务失败', tone: 'warning' });
     } finally {
       setActionJobId(null);
     }
@@ -407,6 +423,7 @@ export function StageBReadableApp() {
             onTab={(next) => { setTab(next); setSelectedId(''); }}
             onSelect={toggleTask}
             onAction={(job) => void handleJobAction(job)}
+            onCancel={(job) => void handleCancelJob(job)}
             onFilterOpen={() => { setFilterOpen((value) => !value); setBatchOpen(false); }}
             onFilter={setTaskFilter}
             onBatchOpen={() => { setBatchOpen((value) => !value); setFilterOpen(false); }}
@@ -484,6 +501,7 @@ function DownloadPage(props: {
   onTab: (tab: DownloadTab) => void;
   onSelect: (jobId: string) => void;
   onAction: (job: ResourceJobSnapshot) => void;
+  onCancel: (job: ResourceJobSnapshot) => void;
   onFilterOpen: () => void;
   onFilter: (filter: TaskFilter) => void;
   onBatchOpen: () => void;
@@ -493,7 +511,7 @@ function DownloadPage(props: {
   onCopy: (value: string) => void;
   showTechnical: boolean;
 }) {
-  const { jobs, tab, activeCount, completedCount, totalSpeed, selectedId, actionJobId, filter, filterOpen, batchOpen, onTab, onSelect, onAction, onFilterOpen, onFilter, onBatchOpen, onRefresh, onPauseAll, onResumeAll, onCopy, showTechnical } = props;
+  const { jobs, tab, activeCount, completedCount, totalSpeed, selectedId, actionJobId, filter, filterOpen, batchOpen, onTab, onSelect, onAction, onCancel, onFilterOpen, onFilter, onBatchOpen, onRefresh, onPauseAll, onResumeAll, onCopy, showTechnical } = props;
   const activeFilterCount = Number(filter.kind !== 'all') + Number(filter.state !== 'all') + Number(filter.sort !== 'newest');
   return (
     <section className="rr-page">
@@ -506,7 +524,7 @@ function DownloadPage(props: {
       </div>
       <div className="rr-toolbar">
         <div className="rr-speed"><strong>{totalSpeed > 0 && tab === 'active' ? formatSpeed(totalSpeed) : tab === 'active' ? activeCount : completedCount}</strong><span>{totalSpeed > 0 && tab === 'active' ? '当前总速度' : tab === 'active' ? '个进行中任务' : '个已完成任务'}</span></div>
-        <span className="rr-toolbar-copy">本地 ResourceJob 与普通下载统一管理</span>
+        <span className="rr-toolbar-copy">本地下载任务</span>
         <div className="rr-toolbar-actions"><span className="rr-list-label"><ListChecks size={16} />列表</span><div className="rr-popover-anchor"><button className={`rr-filter-button ${activeFilterCount ? 'active' : ''}`} type="button" onClick={onFilterOpen}><Filter size={16} />筛选{activeFilterCount > 0 && <b>{activeFilterCount}</b>}</button>{filterOpen && <TaskFilterPopover filter={filter} onChange={onFilter} />}</div></div>
       </div>
       <div className="rr-task-head"><span>文件名</span><span>进度 / 大小</span><span>状态</span><span /></div>
@@ -514,7 +532,7 @@ function DownloadPage(props: {
         {jobs.map((job) => (
           <Fragment key={job.job_id}>
             <TaskRow job={job} selected={selectedId === job.job_id} busy={actionJobId === job.job_id} onSelect={() => onSelect(job.job_id)} onAction={() => onAction(job)} />
-            {selectedId === job.job_id && <InlineTaskDetails job={job} showTechnical={showTechnical} onCopy={onCopy} onAction={() => onAction(job)} />}
+            {selectedId === job.job_id && <InlineTaskDetails job={job} busy={actionJobId === job.job_id} showTechnical={showTechnical} onCopy={onCopy} onAction={() => onAction(job)} onCancel={() => onCancel(job)} />}
           </Fragment>
         ))}
         {!jobs.length && <EmptyState icon={<Download size={30} />} title="暂无任务" detail="新任务会自动出现在这里。" />}
@@ -540,7 +558,7 @@ function TaskRow({ job, selected, busy, onSelect, onAction }: { job: ResourceJob
   );
 }
 
-function InlineTaskDetails({ job, showTechnical, onCopy, onAction }: { job: ResourceJobSnapshot; showTechnical: boolean; onCopy: (value: string) => void; onAction: () => void }) {
+function InlineTaskDetails({ job, busy, showTechnical, onCopy, onAction, onCancel }: { job: ResourceJobSnapshot; busy: boolean; showTechnical: boolean; onCopy: (value: string) => void; onAction: () => void; onCancel: () => void }) {
   const waiting = job.status === 'waiting_for_source';
   const completed = job.status === 'completed';
   const paused = job.status === 'paused';
@@ -552,8 +570,8 @@ function InlineTaskDetails({ job, showTechnical, onCopy, onAction }: { job: Reso
       <div className="rr-detail-grid">
         <DetailBlock title="目标"><p>{job.plan_overview || job.subtitle}</p>{job.source_page && <button type="button" className="rr-link-button" onClick={() => window.open(job.source_page!, '_blank', 'noopener,noreferrer')}><Link2 size={15} />{shortHost(job.source_page)}</button>}</DetailBlock>
         <DetailBlock title="选择"><div className="rr-selected-items">{selectedItems.map((item) => <span key={item}><Check size={14} />{item}</span>)}</div><small>来源 {job.source_count} · 备用 {job.alternative_count ?? 0} · 排除 {job.excluded_count}</small></DetailBlock>
-        <DetailBlock title="问题">{waiting ? <div className="rr-problem warning"><TriangleAlert size={18} /><span><strong>当前来源不可用</strong><small>{job.issue || '任务上下文已保留。'}</small></span></div> : <div className="rr-problem healthy"><ShieldCheck size={18} /><span><strong>当前没有阻断问题</strong><small>{completed ? '任务已完成交付。' : 'Runtime 正常持有上下文。'}</small></span></div>}</DetailBlock>
-        <DetailBlock title="下一步"><p>{waiting ? '继续获取可信来源；必要时把原任务目标带回浏览器重新智取。' : completed ? '查看或复制交付位置，来源历史继续保留在链接库。' : paused ? '继续当前任务。' : '继续托管当前本地下载。'}</p><div className="rr-detail-actions"><button className="primary" type="button" onClick={onAction}>{waiting ? <RefreshCw size={16} /> : completed ? <FolderOpen size={16} /> : paused ? <Play size={16} /> : <CirclePause size={16} />}{waiting ? '一键续取' : completed ? '复制交付位置' : paused ? '继续任务' : '暂停任务'}</button>{job.destination && <button type="button" onClick={() => onCopy(job.destination!)}><Copy size={15} />复制路径</button>}</div></DetailBlock>
+        <DetailBlock title="问题">{waiting ? <div className="rr-problem warning"><TriangleAlert size={18} /><span><strong>当前来源不可用</strong><small>{job.issue || '任务信息已保留。'}</small></span></div> : <div className="rr-problem healthy"><ShieldCheck size={18} /><span><strong>当前没有阻断问题</strong><small>{completed ? '任务已完成。' : paused ? '下载已暂停。' : '下载正常进行。'}</small></span></div>}</DetailBlock>
+        <DetailBlock title="下一步"><p>{waiting ? '当前来源需要重新处理。' : completed ? '查看或复制下载位置。' : paused ? '继续当前任务。' : '继续当前下载。'}</p><div className="rr-detail-actions"><button className="primary" type="button" onClick={onAction} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : waiting ? <RefreshCw size={16} /> : completed ? <FolderOpen size={16} /> : paused ? <Play size={16} /> : <CirclePause size={16} />}{waiting ? '重新智取' : completed ? '复制下载位置' : paused ? '继续任务' : '暂停任务'}</button>{!completed && <button type="button" onClick={onCancel} disabled={busy}><X size={15} />取消任务</button>}{job.destination && <button type="button" onClick={() => onCopy(job.destination!)}><Copy size={15} />复制路径</button>}</div></DetailBlock>
       </div>
       {showTechnical && <div className="rr-technical">Runtime · {job.execution_mode === 'download_engine' ? 'Download Engine' : 'Stage B 演示执行'} · {job.job_id}</div>}
     </section>
@@ -603,7 +621,7 @@ function LibraryItem({ item, view, onOpen, onFavorite }: { item: LinkHistoryItem
 }
 
 function TaskFilterPopover({ filter, onChange }: { filter: TaskFilter; onChange: (filter: TaskFilter) => void }) {
-  return <div className="rr-filter-popover rr-popover"><div className="rr-popover-title"><strong>筛选任务</strong><button type="button" onClick={() => onChange({ kind: 'all', state: 'all', sort: 'newest' })}>重置</button></div><FilterGroup title="任务类型" value={filter.kind} options={[['all', '全部'], ['zhiqu', '智取任务'], ['normal', '普通下载']]} onChange={(value) => onChange({ ...filter, kind: value as TaskKindFilter })} /><FilterGroup title="当前状态" value={filter.state} options={[['all', '全部'], ['running', '进行中'], ['paused', '已暂停'], ['issue', '有问题']]} onChange={(value) => onChange({ ...filter, state: value as TaskStateFilter })} /><FilterGroup title="排序" value={filter.sort} options={[['newest', '最新创建'], ['speed', '速度优先'], ['progress', '进度优先']]} onChange={(value) => onChange({ ...filter, sort: value as SortMode })} /></div>;
+  return <div className="rr-filter-popover rr-popover"><div className="rr-popover-title"><strong>筛选任务</strong><button type="button" onClick={() => onChange({ kind: 'all', state: 'all', sort: 'newest' })}>重置</button></div><FilterGroup title="任务类型" value={filter.kind} options={[[ 'all', '全部'], ['zhiqu', '智取任务'], ['normal', '普通下载']]} onChange={(value) => onChange({ ...filter, kind: value as TaskKindFilter })} /><FilterGroup title="当前状态" value={filter.state} options={[[ 'all', '全部'], ['running', '进行中'], ['paused', '已暂停'], ['issue', '有问题']]} onChange={(value) => onChange({ ...filter, state: value as TaskStateFilter })} /><FilterGroup title="排序" value={filter.sort} options={[[ 'newest', '最新创建'], ['speed', '速度优先'], ['progress', '进度优先']]} onChange={(value) => onChange({ ...filter, sort: value as SortMode })} /></div>;
 }
 
 function FilterGroup({ title, value, options, onChange }: { title: string; value: string; options: Array<[string, string]>; onChange: (value: string) => void }) {

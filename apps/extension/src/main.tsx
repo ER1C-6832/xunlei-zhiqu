@@ -7,6 +7,7 @@ import './stage-d2.css';
 import './stage-d3.css';
 import './stage-d5.css';
 import './analysis-progress.css';
+import './stage-e.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

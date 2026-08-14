@@ -35,12 +35,16 @@ export function buildAlternativeGroups(plan: ResourcePlan): PresentedResourceGro
 }
 
 export function recommendationForItem(plan: ResourcePlan, item: PlanItem): string | null {
-  const ranked = [...plan.recommendations].sort((left, right) => {
-    const order = ['current_device', 'compatibility', 'quality', 'small_size', 'manual'];
-    return order.indexOf(left.scenario) - order.indexOf(right.scenario);
-  });
-  const recommendation = ranked.find((entry) => entry.item_ids.includes(item.item_id));
-  return recommendation?.summary || null;
+  const order = ['current_device', 'compatibility', 'quality', 'small_size', 'manual'];
+  const recommendation = [...plan.recommendations]
+    .sort((left, right) => order.indexOf(left.scenario) - order.indexOf(right.scenario))
+    .find((entry) => entry.item_ids.includes(item.item_id));
+  if (!recommendation) return null;
+  if (recommendation.scenario === 'current_device') return '适合当前电脑';
+  if (recommendation.scenario === 'compatibility') return '兼容性更好';
+  if (recommendation.scenario === 'quality') return '优先清晰度';
+  if (recommendation.scenario === 'small_size') return '体积更小';
+  return null;
 }
 
 function classifyItem(plan: ResourcePlan, item: PlanItem): Omit<PresentedResourceGroup, 'items'> {

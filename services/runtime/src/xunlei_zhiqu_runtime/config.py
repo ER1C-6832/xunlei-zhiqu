@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import SecretStr
@@ -45,14 +46,18 @@ class Settings(BaseSettings):
 
     plan_cache_ttl_seconds: float = 1200.0
     plan_cache_max_entries: int = 64
+
+    # Stage E-A: real local HTTP execution is the product default. `noop` remains
+    # available only for fixtures/fallbacks and keeps Stage-B demo semantics.
+    download_executor: Literal["http", "noop"] = "http"
+    download_directory: str = ""
+
     runtime_host: str = "127.0.0.1"
     runtime_port: int = 8765
     runtime_cors_origins: str = (
         "http://127.0.0.1:5173,http://localhost:5173,"
         "http://127.0.0.1:8765,http://localhost:8765"
     )
-    # E0.9 keeps today's localhost Demo open by default while freezing the
-    # authentication seam needed before Stage E writes real files.
     runtime_auth_mode: Literal["off", "static_token"] = "off"
     runtime_static_session_token: SecretStr | None = None
     log_level: str = "INFO"
@@ -64,6 +69,13 @@ class Settings(BaseSettings):
             for origin in self.runtime_cors_origins.split(",")
             if origin.strip()
         ]
+
+    @property
+    def download_directory_path(self) -> Path:
+        configured = self.download_directory.strip()
+        if configured:
+            return Path(configured).expanduser()
+        return Path.home() / "Downloads" / "迅雷智取"
 
     model_config = SettingsConfigDict(
         env_file=".env",
