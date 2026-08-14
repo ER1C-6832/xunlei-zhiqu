@@ -66,7 +66,7 @@ export function RecoveryMode({ recovery, onRefresh }: Props) {
       setMessage('可以在当前页面继续寻找可用下载地址');
     };
     const onActivated = () => markCurrentPageReady();
-    const onUpdated = (_tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
+    const onUpdated: Parameters<typeof chrome.tabs.onUpdated.addListener>[0] = (_tabId, changeInfo, tab) => {
       if (!tab.active || (!changeInfo.url && changeInfo.status !== 'complete')) return;
       markCurrentPageReady();
     };
