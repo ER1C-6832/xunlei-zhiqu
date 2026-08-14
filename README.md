@@ -12,9 +12,11 @@
 - **Stage E / Wave B：完成** — `interrupted`、失败事实、多 Asset 与 Task Center 真实状态。
 - **Stage E / Wave C：完成并真人验收** — HTTP Range、`.part` 断点、SQLite 持久化、Runtime kill/restart 后原任务原路径继续。
 - **Stage E：完成**。
-- **Stage F：进行中** — Diagnosis、重新智取、Node B、确定性来源验证与 Source Switch 已进入主线；正式完成仍以 Source A → 浏览器重新智取 → Source B → 原 `.part` 续到 100% 的真人链路为准。
+- **Stage F：完成并真人验收** — Diagnosis、一键续取、Browser Reacquisition、真实 Node B、确定性来源验证与 Source Switch 已完整闭环。
 
 Stage E 真人验收事实：JDK 真实下载中关闭 Runtime，重启后原 ResourceJob 和 `.part` 仍在，继续下载使用 HTTP Range 从原 offset 增长并最终完成；没有从 0 重来，也没有产生重复文件名。
+
+Stage F 真人验收事实：受控真实 HTTP 下载中 Source A 在约 39.4% 进度永久失效并返回 HTTP 410；Diagnosis 得到 `source_unavailable → reacquire_source → waiting_for_source`；Task Center 一键续取后浏览器重新 Capture，Node B 使用真实 `deepseek-v4-flash` 调用匹配两个候选；Runtime 对 Source B 完成 3 段 `sample_match`，对同名同大小但不同字节的 Source C 明确 `mismatch`；随后原任务以磁盘 `.part` 的 `105644032` bytes 为 offset 切换到 Source B，收到 `206` 且 `Content-Range` 从同一 offset 开始，最终完成 256 MiB 文件。最终跨来源拼接文件 SHA256 与完整 Source B 参考文件完全一致：`F17D53B0A0D7968B33C22C7F941C8691C041BE00DD5889F5BE4998341927BE9D`。
 
 ## 核心架构
 
@@ -109,7 +111,7 @@ http://127.0.0.1:8877/control?source_a=gone
 - Source B：与 A 完全相同的字节内容，不同 URL，支持 Range；
 - Source C：名称和总大小相同，但字节内容不同。
 
-目标真人链路：
+已真人验收链路：
 
 ```text
 Source A 真下载
@@ -124,6 +126,7 @@ Source A 真下载
 → 原 ResourceJob Source A → Source B
 → 原 .part 从旧 offset 继续
 → 100%
+→ 最终 SHA256 与完整 Source B 一致
 ```
 
 ## 当前开发纪律
