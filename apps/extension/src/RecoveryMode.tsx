@@ -34,11 +34,7 @@ export function RecoveryMode({ recovery, onRefresh }: Props) {
     setMessage('正在当前页面寻找可用下载地址…');
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id || !tab.url) throw new Error('未找到当前资源页');
-      if (current.original_page_url && !sameRecoveryPage(tab.url, current.original_page_url)) {
-        setMessage('请先切换到原资源页，再继续寻找可用来源');
-        return;
-      }
+      if (!tab?.id || !tab.url) throw new Error('未找到当前页面');
       const key = `${current.recovery_id}:${tab.url}`;
       if (!force && submittedKey.current === key) return;
       const response = await sendContentMessage(tab.id, { type: 'XUNLEI_ZHIQU_FULL_PAGE_SCAN', tabId: tab.id });
@@ -62,6 +58,25 @@ export function RecoveryMode({ recovery, onRefresh }: Props) {
     autoAttemptedRecovery.current = current.recovery_id;
     void scanCurrentPage(false);
   }, [current.phase, current.recovery_id, scanCurrentPage]);
+
+  useEffect(() => {
+    const markCurrentPageReady = () => {
+      if (scanInFlight.current || current.phase === 'completed') return;
+      setError(null);
+      setMessage('可以在当前页面继续寻找可用下载地址');
+    };
+    const onActivated = () => markCurrentPageReady();
+    const onUpdated = (_tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
+      if (!tab.active || (!changeInfo.url && changeInfo.status !== 'complete')) return;
+      markCurrentPageReady();
+    };
+    chrome.tabs.onActivated.addListener(onActivated);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    return () => {
+      chrome.tabs.onActivated.removeListener(onActivated);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+    };
+  }, [current.phase]);
 
   function applyResult(result: RecoveryCaptureResult) {
     setCurrent(result.recovery);
@@ -93,6 +108,8 @@ export function RecoveryMode({ recovery, onRefresh }: Props) {
     await chrome.tabs.create({ url: current.original_page_url });
   }
 
+  const canSearchPage = !busy && (current.phase === 'opening_source_page' || current.phase === 'manual_selection');
+
   return (
     <main className="zhiqu-shell">
       <header className="zhiqu-header"><strong>继续下载</strong></header>
@@ -106,9 +123,9 @@ export function RecoveryMode({ recovery, onRefresh }: Props) {
           <span>{message}</span>
         </div>
         {busy && <div className="zhiqu-working" role="status"><LoaderCircle className="spin" size={20} /><span>{message}</span></div>}
-        {!busy && current.phase === 'opening_source_page' && (
+        {canSearchPage && (
           <div className="zhiqu-start-actions">
-            <button className="zhiqu-primary" type="button" onClick={() => void scanCurrentPage(true)}><Search size={18} />在当前页面继续寻找</button>
+            <button className="zhiqu-primary" type="button" onClick={() => void scanCurrentPage(true)}><Search size={18} />在当前页面寻找</button>
             {current.original_page_url && <button className="zhiqu-secondary" type="button" onClick={() => void openOriginalPage()}><ExternalLink size={17} />打开原资源页</button>}
           </div>
         )}
@@ -130,7 +147,7 @@ export function RecoveryMode({ recovery, onRefresh }: Props) {
             ))}
           </section>
         )}
-        {current.phase === 'completed' && <div className="zhiqu-success" role="status"><Check size={16} /><span>已找到可用来源，正在继续下载</span></div>}
+        {current.phase === 'completed' && <div className="zhiqu-success" role="status"><Check size={16} /><span>已找到可用地址，正在继续下载</span></div>}
         {error && <div className="zhiqu-error" role="alert"><TriangleAlert size={18} /><span>{error}</span></div>}
       </section>
     </main>
@@ -178,16 +195,6 @@ function redactModelText(value: string | null | undefined): string | null | unde
   return value
     .replace(/https?:\/\/[^\s<>'\"]+/gi, '[link]')
     .replace(/\b(token|signature|sig|auth|authorization|api[_-]?key)=([^\s&]+)/gi, '$1=[redacted]');
-}
-
-function sameRecoveryPage(current: string, original: string): boolean {
-  try {
-    const left = new URL(current);
-    const right = new URL(original);
-    return left.origin === right.origin && left.pathname === right.pathname;
-  } catch {
-    return current === original;
-  }
 }
 
 async function sendContentMessage(tabId: number, message: Record<string, unknown>) {
