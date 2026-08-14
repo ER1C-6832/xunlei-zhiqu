@@ -44,7 +44,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.download_executor = download_executor
     app.state.download_executor_mode = settings.download_executor
     app.state.recovery_service = recovery_service
-    app.state.transient_retry_jobs = set()
     app.state.plan_cache = ResourcePlanCache(ttl_seconds=settings.plan_cache_ttl_seconds, max_entries=settings.plan_cache_max_entries)
     app.state.analyzer = CaptureAnalyzer(provider, cache=app.state.plan_cache)
 
@@ -54,9 +53,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await download_executor.restore(execution_request, execution_status)
     restored_statuses = [status for execution_request, _ in restored if (status := await download_executor.status(execution_request.job.job_id)) is not None]
     logger.info("download_rehydrate jobs_loaded=%s resumable_jobs=%s completed_jobs=%s", len(restored), sum(1 for status in restored_statuses if status.state in {"paused", "failed"} and status.resume_available), sum(1 for status in restored_statuses if status.state == "completed"))
+
+    reconcile_task = asyncio.create_task(
+        _reconcile_execution_loop(app),
+        name="zhiqu-execution-reconcile",
+    ) if recovery_service is not None else None
     try:
         yield
     finally:
+        if reconcile_task is not None:
+            reconcile_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await reconcile_task
         await download_executor.aclose()
         await provider.aclose()
         state_store.close()
@@ -98,12 +106,17 @@ async def analyze_capture(batch: CaptureBatch, request: Request, refresh: bool =
 @app.post("/v1/capture/analyze-stream", response_class=StreamingResponse)
 async def analyze_capture_stream(batch: CaptureBatch, request: Request, refresh: bool = False) -> StreamingResponse:
     analyzer = request.app.state.analyzer
+
     async def stream_events() -> AsyncIterator[str]:
-        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue(); cache_hit = False
+        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        cache_hit = False
+
         async def phase_sink(phase: str) -> None:
             nonlocal cache_hit
-            if phase == "cache_hit": cache_hit = True
+            if phase == "cache_hit":
+                cache_hit = True
             await queue.put({"type": "phase", "phase": phase})
+
         async def run_analysis() -> None:
             try:
                 plan = await analyzer.analyze(batch, force_refresh=refresh, phase_sink=phase_sink)
@@ -112,17 +125,24 @@ async def analyze_capture_stream(batch: CaptureBatch, request: Request, refresh:
             except (ModelProviderTimeoutError, ModelProviderRequestError, ModelProviderResponseError, ValueError) as exc:
                 await queue.put({"type": "error", "message": _analysis_stream_error(exc)})
             except Exception:
-                logger.exception("progressive analysis failed unexpectedly"); await queue.put({"type": "error", "message": "智能分析失败，请稍后重试。"})
-            finally: await queue.put(None)
+                logger.exception("progressive analysis failed unexpectedly")
+                await queue.put({"type": "error", "message": "智能分析失败，请稍后重试。"})
+            finally:
+                await queue.put(None)
+
         task = asyncio.create_task(run_analysis())
         try:
             while True:
                 event = await queue.get()
-                if event is None: break
+                if event is None:
+                    break
                 yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
         finally:
-            if not task.done(): task.cancel()
-            with suppress(asyncio.CancelledError): await task
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
     return StreamingResponse(stream_events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
@@ -131,99 +151,143 @@ async def create_resource_job(payload: ResourceJobCreateRequest, request: Reques
     try:
         compiled = compile_confirmed_request(payload)
         if _uses_real_local_executor(request, compiled.delivery_target):
-            assets = execution_assets_from_resource_job(compiled); request.app.state.download_executor.validate_assets(assets)
+            assets = execution_assets_from_resource_job(compiled)
+            request.app.state.download_executor.validate_assets(assets)
             destination = str(request.app.state.settings.download_directory_path.expanduser().resolve())
             job = create_job(compiled, execution_mode="download_engine", total_bytes_override=execution_expected_total_bytes(assets), source_count_override=execution_source_count(assets), destination_override=destination, private_context=payload)
-            try: await request.app.state.download_executor.create(execution_request_from_assets(job, assets))
+            try:
+                await request.app.state.download_executor.create(execution_request_from_assets(job, assets))
             except Exception:
-                cancel_job(job.job_id); raise
-            return await _refresh_execution_job(request, job)
+                cancel_job(job.job_id)
+                raise
+            return get_job(job.job_id) or job
         job = create_job(compiled)
-        if compiled.delivery_target == "local": await request.app.state.download_executor.create(execution_request_from_assets(job, execution_assets_from_resource_job(compiled)))
+        if compiled.delivery_target == "local":
+            await request.app.state.download_executor.create(execution_request_from_assets(job, execution_assets_from_resource_job(compiled)))
         return job
-    except ValueError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except OSError as exc: raise HTTPException(status_code=500, detail="无法创建本地下载文件") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="无法创建本地下载文件") from exc
 
 
 @app.post("/v1/jobs/manual", response_model=ResourceJobSnapshot)
 async def create_manual_resource_job(payload: ManualJobCreateRequest, request: Request) -> ResourceJobSnapshot:
     try:
         if _uses_real_local_executor(request, payload.delivery_target):
-            assets = execution_assets_from_manual_job(payload); request.app.state.download_executor.validate_assets(assets)
+            assets = execution_assets_from_manual_job(payload)
+            request.app.state.download_executor.validate_assets(assets)
             destination = str(request.app.state.settings.download_directory_path.expanduser().resolve())
             job = create_manual_job(payload, execution_mode="download_engine", total_bytes_override=execution_expected_total_bytes(assets), source_count_override=execution_source_count(assets), destination_override=destination)
-            try: await request.app.state.download_executor.create(execution_request_from_assets(job, assets))
+            try:
+                await request.app.state.download_executor.create(execution_request_from_assets(job, assets))
             except Exception:
-                cancel_job(job.job_id); raise
-            return await _refresh_execution_job(request, job)
+                cancel_job(job.job_id)
+                raise
+            return get_job(job.job_id) or job
         job = create_manual_job(payload)
-        if payload.delivery_target == "local": await request.app.state.download_executor.create(execution_request_from_assets(job, execution_assets_from_manual_job(payload)))
+        if payload.delivery_target == "local":
+            await request.app.state.download_executor.create(execution_request_from_assets(job, execution_assets_from_manual_job(payload)))
         return job
-    except ValueError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except OSError as exc: raise HTTPException(status_code=500, detail="无法创建本地下载文件") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="无法创建本地下载文件") from exc
 
 
 @app.get("/v1/jobs", response_model=list[ResourceJobSnapshot])
-async def list_jobs(request: Request) -> list[ResourceJobSnapshot]:
-    return [await _refresh_execution_job(request, job) for job in list_stored_jobs()]
+async def list_jobs() -> list[ResourceJobSnapshot]:
+    return list_stored_jobs()
 
 
 @app.get("/v1/jobs/{job_id}", response_model=ResourceJobSnapshot)
-async def read_job(job_id: str, request: Request) -> ResourceJobSnapshot:
+async def read_job(job_id: str) -> ResourceJobSnapshot:
     job = get_job(job_id)
-    if job is None: raise HTTPException(status_code=404, detail="下载任务不存在")
-    return await _refresh_execution_job(request, job)
+    if job is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
+    return job
 
 
 @app.post("/v1/jobs/{job_id}/pause", response_model=ResourceJobSnapshot)
 async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     job = get_job(job_id)
-    if job is None: raise HTTPException(status_code=404, detail="下载任务不存在")
+    if job is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     try:
         if job.execution_mode == "download_engine":
-            job = await _refresh_execution_job(request, job)
-            if job.status in {"interrupted", "waiting_for_source"}: raise ValueError("下载当前不能暂停")
-            await request.app.state.download_executor.pause(job_id); return await _refresh_execution_job(request, job)
+            if job.status in {"interrupted", "waiting_for_source"}:
+                raise ValueError("下载当前不能暂停")
+            await request.app.state.download_executor.pause(job_id)
+            return get_job(job_id) or job
         paused = pause_job(job_id)
-        if paused is None: raise HTTPException(status_code=404, detail="下载任务不存在")
-        await request.app.state.download_executor.pause(job_id); return paused
-    except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if paused is None:
+            raise HTTPException(status_code=404, detail="下载任务不存在")
+        await request.app.state.download_executor.pause(job_id)
+        return paused
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/v1/jobs/{job_id}/resume", response_model=ResourceJobSnapshot)
 async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     job = get_job(job_id)
-    if job is None: raise HTTPException(status_code=404, detail="下载任务不存在")
+    if job is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     try:
         if job.execution_mode == "download_engine":
-            job = await _refresh_execution_job(request, job)
-            if job.status == "waiting_for_source": raise ValueError("当前来源不可继续，请使用一键续取")
-            executor = request.app.state.download_executor; status = await executor.status(job_id); service: RecoveryService | None = request.app.state.recovery_service
+            if job.status == "waiting_for_source":
+                raise ValueError("当前下载地址不可继续，请使用一键续取")
+            executor = request.app.state.download_executor
+            status = await executor.status(job_id)
+            service: RecoveryService | None = request.app.state.recovery_service
             if status is not None and service is not None and status.state == "failed":
-                execution_request = await executor.execution_request(job_id); asset = _active_execution_asset(execution_request, status.current_asset_id); decision = service.diagnosis_for(job_id, status, asset)
+                if job.status == "interrupted" and job.next_action == "continue_acquisition":
+                    await executor.retry_same_source(job_id)
+                    return get_job(job_id) or job
+                execution_request = await executor.execution_request(job_id)
+                asset = _active_execution_asset(execution_request, status.current_asset_id)
+                decision = service.diagnosis_for(job_id, status, asset)
                 if decision.action == "reacquire_source":
-                    service.mark_waiting_for_source(job_id, decision); raise ValueError("当前来源不可继续，请使用一键续取")
-                if decision.action == "fix_local_issue": raise ValueError(status.error or "请先修复本地保存问题")
-                if decision.action == "retry_same_source":
-                    service.note_same_source_retry(job_id, status); await executor.retry_same_source(job_id); return await _refresh_execution_job(request, job)
-                if decision.action == "resume_same_source": service.note_same_source_retry(job_id, status)
-            await executor.resume(job_id); return await _refresh_execution_job(request, job)
+                    if decision.reason == "network_interrupted":
+                        service.offer_alternative_source(job_id)
+                        raise ValueError("当前连接仍不可用，可以继续重试或寻找其他来源")
+                    service.mark_waiting_for_source(job_id, decision)
+                    raise ValueError("当前下载地址不可继续，请使用一键续取")
+                if decision.action == "fix_local_issue":
+                    raise ValueError(status.error or "请先修复本地保存问题")
+                if decision.action in {"retry_same_source", "resume_same_source"}:
+                    service.note_same_source_retry(job_id, status)
+                    await executor.retry_same_source(job_id)
+                    return get_job(job_id) or job
+            await executor.resume(job_id)
+            return get_job(job_id) or job
         resumed = resume_job(job_id)
-        if resumed is None: raise HTTPException(status_code=404, detail="下载任务不存在")
-        await request.app.state.download_executor.resume(job_id); return resumed
-    except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if resumed is None:
+            raise HTTPException(status_code=404, detail="下载任务不存在")
+        await request.app.state.download_executor.resume(job_id)
+        return resumed
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/v1/jobs/{job_id}/continue-acquisition", response_model=RecoveryHandoff)
 async def continue_acquisition(job_id: str, request: Request) -> RecoveryHandoff:
     service: RecoveryService | None = request.app.state.recovery_service
-    if service is None: raise HTTPException(status_code=409, detail="当前下载执行器不支持一键续取")
+    if service is None:
+        raise HTTPException(status_code=409, detail="当前下载执行器不支持一键续取")
     job = get_job(job_id)
-    if job is None: raise HTTPException(status_code=404, detail="下载任务不存在")
-    job = await _refresh_execution_job(request, job)
-    if job.status != "waiting_for_source": raise HTTPException(status_code=409, detail="当前任务不需要重新智取")
-    try: return await service.continue_acquisition(job_id)
-    except ValueError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
+    browser_reacquisition = job.status == "interrupted" and job.next_action == "continue_acquisition"
+    if job.status != "waiting_for_source" and not browser_reacquisition:
+        raise HTTPException(status_code=409, detail="当前任务不需要寻找其他来源")
+    try:
+        return await service.continue_acquisition(
+            job_id,
+            browser_reacquisition=browser_reacquisition,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/v1/recovery/pending", response_model=list[PendingRecoveryView])
@@ -235,41 +299,52 @@ async def pending_recovery(request: Request) -> list[PendingRecoveryView]:
 @app.post("/v1/recovery/{recovery_id}/capture", response_model=RecoveryCaptureResult)
 async def submit_recovery_capture(recovery_id: str, payload: RecoveryCaptureRequest, request: Request) -> RecoveryCaptureResult:
     service: RecoveryService | None = request.app.state.recovery_service
-    if service is None: raise HTTPException(status_code=409, detail="当前下载执行器不支持重新智取")
-    try: return await service.submit_capture(recovery_id, payload.capture)
-    except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if service is None:
+        raise HTTPException(status_code=409, detail="当前下载执行器不支持重新智取")
+    try:
+        return await service.submit_capture(recovery_id, payload.capture)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/v1/recovery/{recovery_id}/candidates/{candidate_id}", response_model=RecoveryCandidateChoiceResult)
 async def choose_recovery_candidate(recovery_id: str, candidate_id: str, request: Request) -> RecoveryCandidateChoiceResult:
     service: RecoveryService | None = request.app.state.recovery_service
-    if service is None: raise HTTPException(status_code=409, detail="当前下载执行器不支持重新智取")
-    try: return await service.choose_candidate(recovery_id, candidate_id)
-    except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if service is None:
+        raise HTTPException(status_code=409, detail="当前下载执行器不支持重新智取")
+    try:
+        return await service.choose_candidate(recovery_id, candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/v1/jobs/{job_id}/cancel", status_code=204)
 async def cancel_resource_job(job_id: str, request: Request) -> Response:
     job = get_job(job_id)
-    if job is None: raise HTTPException(status_code=404, detail="下载任务不存在")
+    if job is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     await request.app.state.download_executor.cancel(job_id)
-    if not cancel_job(job_id): raise HTTPException(status_code=404, detail="下载任务不存在")
+    if not cancel_job(job_id):
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     return Response(status_code=204)
 
 
 @app.get("/v1/link-history", response_model=list[LinkHistoryItem])
 @app.get("/v1/link-library", response_model=list[LinkHistoryItem])
-async def read_link_library() -> list[LinkHistoryItem]: return list_link_history()
+async def read_link_library() -> list[LinkHistoryItem]:
+    return list_link_history()
 
 
 @app.post("/v1/link-library/favorites", response_model=LinkHistoryItem)
-async def create_link_favorite(payload: LinkFavoriteCreateRequest) -> LinkHistoryItem: return create_favorite(payload)
+async def create_link_favorite(payload: LinkFavoriteCreateRequest) -> LinkHistoryItem:
+    return create_favorite(payload)
 
 
 @app.post("/v1/link-library/{history_id}/favorite", response_model=LinkHistoryItem)
 async def update_link_favorite(history_id: str, payload: LinkFavoriteUpdateRequest) -> LinkHistoryItem:
     item = set_favorite(history_id, payload.favorite)
-    if item is None: raise HTTPException(status_code=404, detail="Link library item not found")
+    if item is None:
+        raise HTTPException(status_code=404, detail="Link library item not found")
     return item
 
 
@@ -277,46 +352,84 @@ def _uses_real_local_executor(request: Request, delivery_target: str) -> bool:
     return delivery_target == "local" and request.app.state.download_executor_mode == "http"
 
 
-async def _refresh_execution_job(request: Request, job: ResourceJobSnapshot) -> ResourceJobSnapshot:
-    if job.execution_mode != "download_engine": return job
-    executor = request.app.state.download_executor; status = await executor.status(job.job_id)
-    if status is None: return job
-    projected = project_execution_status(job.job_id, status) or job
-    service: RecoveryService | None = request.app.state.recovery_service
-    if service is None or status.state != "failed": return projected
-    execution_request = await executor.execution_request(job.job_id); asset = _active_execution_asset(execution_request, status.current_asset_id); decision = service.diagnosis_for(job.job_id, status, asset)
-    logger.info("download_diagnosis job_id=%s failure_kind=%s http_status=%s action=%s reason=%s", job.job_id, status.failure_kind, status.http_status_code, decision.action, decision.reason)
+async def _reconcile_execution_loop(app: FastAPI) -> None:
+    while True:
+        for job in list_stored_jobs():
+            if job.execution_mode != "download_engine":
+                continue
+            try:
+                await _reconcile_execution_job(app, job)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("download_reconcile_failed job_id=%s", job.job_id)
+        await asyncio.sleep(0.5)
 
-    # While the same Runtime is alive, one connection-level/5xx failure gets one
-    # lightweight same-source retry before we ask the browser to reacquire. Runtime
-    # restart remains passive because `runtime_interrupted` is intentionally excluded.
-    live_transient = status.failure_kind == "connection_interrupted" or (status.failure_kind == "http_error" and status.http_status_code in {500, 502, 503, 504})
-    retried_jobs: set[str] = request.app.state.transient_retry_jobs
-    if live_transient and job.job_id not in retried_jobs:
-        retried_jobs.add(job.job_id)
+
+async def _reconcile_execution_job(app: FastAPI, job: ResourceJobSnapshot) -> None:
+    executor = app.state.download_executor
+    status = await executor.status(job.job_id)
+    if status is None:
+        return
+    projected = project_execution_status(job.job_id, status) or job
+    service: RecoveryService | None = app.state.recovery_service
+    if service is None or status.state != "failed":
+        return
+
+    execution_request = await executor.execution_request(job.job_id)
+    asset = _active_execution_asset(execution_request, status.current_asset_id)
+    decision = service.diagnosis_for(job.job_id, status, asset)
+    logger.info(
+        "download_diagnosis job_id=%s failure_kind=%s http_status=%s action=%s reason=%s",
+        job.job_id,
+        status.failure_kind,
+        status.http_status_code,
+        decision.action,
+        decision.reason,
+    )
+
+    live_transient = status.failure_kind == "connection_interrupted" or (
+        status.failure_kind == "http_error"
+        and status.http_status_code in {500, 502, 503, 504}
+    )
+    if live_transient and decision.action in {"retry_same_source", "resume_same_source"}:
         service.note_same_source_retry(job.job_id, status)
-        logger.info("download_same_source_retry job_id=%s failure_kind=%s http_status=%s", job.job_id, status.failure_kind, status.http_status_code)
+        logger.info(
+            "download_same_source_retry job_id=%s failure_kind=%s http_status=%s",
+            job.job_id,
+            status.failure_kind,
+            status.http_status_code,
+        )
         try:
             await executor.retry_same_source(job.job_id)
         except ValueError:
             logger.warning("download_same_source_retry_rejected job_id=%s", job.job_id)
-        refreshed = await executor.status(job.job_id)
-        return project_execution_status(job.job_id, refreshed) or projected if refreshed is not None else projected
+        return
 
-    if decision.action == "reacquire_source": return service.mark_waiting_for_source(job.job_id, decision) or projected
-    return projected
+    if decision.action == "reacquire_source":
+        if decision.reason == "network_interrupted":
+            service.offer_alternative_source(job.job_id)
+        else:
+            service.mark_waiting_for_source(job.job_id, decision)
+        return
+
+    if projected.status == "waiting_for_source":
+        return
 
 
 def _active_execution_asset(execution_request, current_asset_id: str | None):
-    if execution_request is None: return None
+    if execution_request is None:
+        return None
     if current_asset_id:
         for asset in execution_request.assets:
-            if asset.asset_id == current_asset_id: return asset
+            if asset.asset_id == current_asset_id:
+                return asset
     return next((asset for asset in execution_request.assets if not asset.completed), execution_request.assets[0] if execution_request.assets else None)
 
 
 def _analysis_stream_error(exc: Exception) -> str:
-    if isinstance(exc, ValueError) and not isinstance(exc, (ModelProviderTimeoutError, ModelProviderRequestError, ModelProviderResponseError)): return f"模型返回的 ResourcePlan 未通过确定性校验：{exc}"
+    if isinstance(exc, ValueError) and not isinstance(exc, (ModelProviderTimeoutError, ModelProviderRequestError, ModelProviderResponseError)):
+        return f"模型返回的 ResourcePlan 未通过确定性校验：{exc}"
     return str(exc)
 
 
