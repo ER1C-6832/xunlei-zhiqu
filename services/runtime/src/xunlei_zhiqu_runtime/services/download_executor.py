@@ -1,5 +1,7 @@
-from dataclasses import dataclass, replace
-from typing import Literal, Protocol
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, replace
+from typing import Any, Literal, Protocol
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from xunlei_zhiqu_runtime.models import (
@@ -20,16 +22,26 @@ DownloadExecutionState = Literal[
 ]
 DownloadFailureKind = Literal[
     "connection_interrupted",
+    "runtime_interrupted",
     "http_error",
     "length_mismatch",
+    "range_unsupported",
+    "range_mismatch",
+    "remote_changed",
+    "preflight",
     "local_io",
     "unknown",
 ]
+RangeCapability = Literal["unknown", "supported", "unsupported"]
 
 
 @dataclass(frozen=True, slots=True)
 class DownloadExecutionAsset:
-    """One logical file that must be materialized for a ResourceJob."""
+    """One logical file that must be materialized for a ResourceJob.
+
+    Stage E-C deliberately keeps the resume facts on the asset. Paths are allocated
+    exactly once and become part of the asset's local execution identity.
+    """
 
     asset_id: str
     label: str
@@ -37,6 +49,16 @@ class DownloadExecutionAsset:
     primary_source: str
     alternate_sources: tuple[str, ...] = ()
     expected_bytes: int | None = None
+    filename: str | None = None
+    final_path: str | None = None
+    part_path: str | None = None
+    downloaded_bytes: int = 0
+    final_url: str | None = None
+    content_type: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    range_capability: RangeCapability = "unknown"
+    completed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,12 +83,19 @@ class DownloadExecutionStatus:
     error: str | None = None
     failure_kind: DownloadFailureKind | None = None
     http_status_code: int | None = None
+    resume_available: bool = False
 
 
 class DownloadExecutorPort(Protocol):
     """Execution boundary between ResourceJob orchestration and a concrete download engine."""
 
     async def create(self, request: DownloadExecutionRequest) -> None: ...
+
+    async def restore(
+        self,
+        request: DownloadExecutionRequest,
+        status: DownloadExecutionStatus,
+    ) -> None: ...
 
     async def pause(self, job_id: str) -> None: ...
 
@@ -85,6 +114,13 @@ class NoopDownloadExecutor:
     """Fixture/fallback executor. Stage E local product flow defaults to the HTTP executor."""
 
     async def create(self, request: DownloadExecutionRequest) -> None:
+        return None
+
+    async def restore(
+        self,
+        request: DownloadExecutionRequest,
+        status: DownloadExecutionStatus,
+    ) -> None:
         return None
 
     async def pause(self, job_id: str) -> None:
@@ -129,10 +165,7 @@ def execution_assets_from_resource_job(
     if payload.capture is None:
         return ()
 
-    candidate_map = {
-        candidate.candidate_id: candidate
-        for candidate in payload.capture.candidates
-    }
+    candidate_map = {candidate.candidate_id: candidate for candidate in payload.capture.candidates}
     groups: list[_AssetGroup] = []
 
     for item in payload.plan.selected:
@@ -259,6 +292,45 @@ def replace_execution_asset(
     return replace(request, assets=tuple(next_assets))
 
 
+def replace_asset_in_request(
+    request: DownloadExecutionRequest,
+    asset: DownloadExecutionAsset,
+) -> DownloadExecutionRequest:
+    found = False
+    assets: list[DownloadExecutionAsset] = []
+    for current in request.assets:
+        if current.asset_id == asset.asset_id:
+            assets.append(asset)
+            found = True
+        else:
+            assets.append(current)
+    if not found:
+        raise ValueError(f"ExecutionAsset 不存在：{asset.asset_id}")
+    return replace(request, assets=tuple(assets))
+
+
+def execution_request_to_dict(request: DownloadExecutionRequest) -> dict[str, Any]:
+    return {
+        "job": request.job.model_dump(mode="json"),
+        "assets": [asdict(asset) for asset in request.assets],
+    }
+
+
+def execution_request_from_dict(payload: dict[str, Any]) -> DownloadExecutionRequest:
+    return DownloadExecutionRequest(
+        job=ResourceJobSnapshot.model_validate(payload["job"]),
+        assets=tuple(DownloadExecutionAsset(**item) for item in payload.get("assets", [])),
+    )
+
+
+def execution_status_to_dict(status: DownloadExecutionStatus) -> dict[str, Any]:
+    return asdict(status)
+
+
+def execution_status_from_dict(payload: dict[str, Any]) -> DownloadExecutionStatus:
+    return DownloadExecutionStatus(**payload)
+
+
 def canonicalize_source(value: str) -> str:
     """Conservative identity key; signed/query-bearing URLs are never over-normalized."""
     source = value.strip()
@@ -272,8 +344,7 @@ def canonicalize_source(value: str) -> str:
         host = parts.hostname.lower()
         port = parts.port
         if port is not None and not (
-            (scheme == "http" and port == 80)
-            or (scheme == "https" and port == 443)
+            (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
         ):
             host = f"{host}:{port}"
         netloc = host
