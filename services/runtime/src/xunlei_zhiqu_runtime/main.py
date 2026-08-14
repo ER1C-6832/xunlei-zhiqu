@@ -40,6 +40,7 @@ from xunlei_zhiqu_runtime.services.download_executor import (
     execution_request_from_assets,
     execution_source_count,
 )
+from xunlei_zhiqu_runtime.services.download_state_store import DownloadStateStore
 from xunlei_zhiqu_runtime.services.http_download_executor import HttpDownloadExecutor
 from xunlei_zhiqu_runtime.services.job_store import (
     cancel_job,
@@ -51,7 +52,9 @@ from xunlei_zhiqu_runtime.services.job_store import (
     list_jobs as list_stored_jobs,
     list_link_history,
     pause_job,
+    persist_execution_state,
     project_execution_status,
+    restored_execution_records,
     resume_job,
     set_favorite,
 )
@@ -64,7 +67,8 @@ logger = logging.getLogger("uvicorn.error")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    initialize_job_store(settings.task_fixtures_enabled)
+    state_store = DownloadStateStore(settings.runtime_state_db_path)
+    initialize_job_store(settings.task_fixtures_enabled, persistence=state_store)
     provider = create_provider(settings)
     session_token = (
         settings.runtime_static_session_token.get_secret_value()
@@ -72,12 +76,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else None
     )
     download_executor = (
-        HttpDownloadExecutor(settings.download_directory_path)
+        HttpDownloadExecutor(
+            settings.download_directory_path,
+            state_sink=persist_execution_state,
+            logger=logger,
+        )
         if settings.download_executor == "http"
         else NoopDownloadExecutor()
     )
     app.state.settings = settings
     app.state.provider = provider
+    app.state.state_store = state_store
     app.state.client_session_auth = create_client_session_auth(
         settings.runtime_auth_mode,
         session_token,
@@ -89,11 +98,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         max_entries=settings.plan_cache_max_entries,
     )
     app.state.analyzer = CaptureAnalyzer(provider, cache=app.state.plan_cache)
+
+    restored = restored_execution_records()
+    if settings.download_executor == "http":
+        for execution_request, execution_status in restored:
+            await download_executor.restore(execution_request, execution_status)
+    restored_statuses = [
+        status
+        for execution_request, _ in restored
+        if (status := await download_executor.status(execution_request.job.job_id)) is not None
+    ]
+    logger.info(
+        "download_rehydrate jobs_loaded=%s resumable_jobs=%s completed_jobs=%s",
+        len(restored),
+        sum(
+            1
+            for status in restored_statuses
+            if status.state in {"paused", "failed"} and status.resume_available
+        ),
+        sum(1 for status in restored_statuses if status.state == "completed"),
+    )
     try:
         yield
     finally:
         await download_executor.aclose()
         await provider.aclose()
+        state_store.close()
 
 
 _boot_settings = get_settings()
@@ -214,10 +244,7 @@ async def analyze_capture_stream(
     return StreamingResponse(
         stream_events(),
         media_type="application/x-ndjson",
-        headers={
-            "Cache-Control": "no-store",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 
@@ -235,6 +262,7 @@ async def create_resource_job(payload: ResourceJobCreateRequest, request: Reques
                 total_bytes_override=execution_expected_total_bytes(assets),
                 source_count_override=execution_source_count(assets),
                 destination_override=destination,
+                private_context=payload,
             )
             try:
                 await request.app.state.download_executor.create(
@@ -335,8 +363,6 @@ async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnaps
     try:
         if job.execution_mode == "download_engine":
             job = await _refresh_execution_job(request, job)
-            if job.status == "interrupted":
-                raise ValueError("下载已中断，当前不能继续")
             await request.app.state.download_executor.resume(job_id)
             return await _refresh_execution_job(request, job)
         resumed = resume_job(job_id)

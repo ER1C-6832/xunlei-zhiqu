@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # available only as an executor fixture/fallback; it does not enable UI jobs.
     download_executor: Literal["http", "noop"] = "http"
     download_directory: str = ""
+    # E-C: private local ResourceJob/execution persistence. Empty keeps the
+    # product default under the user's home directory and tests can override it.
+    runtime_state_db: str = ""
     # Stage-B task fixtures are a separate, explicit UI-development switch.
     task_fixtures_enabled: bool = False
 
@@ -78,6 +81,13 @@ class Settings(BaseSettings):
         if configured:
             return Path(configured).expanduser()
         return Path.home() / "Downloads" / "迅雷智取"
+
+    @property
+    def runtime_state_db_path(self) -> Path:
+        configured = self.runtime_state_db.strip()
+        if configured:
+            return Path(configured).expanduser()
+        return Path.home() / ".xunlei-zhiqu" / "runtime.db"
 
     model_config = SettingsConfigDict(
         env_file=".env",
