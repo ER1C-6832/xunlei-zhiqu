@@ -72,7 +72,7 @@ export function TaskRecoveryActions() {
     <button
       key={`${job.job_id}-recovery-action`}
       type="button"
-      onClick={(event: MouseEvent) => { event.stopPropagation(); void run(job); }}
+      onClick={(event) => { event.stopPropagation(); void run(job); }}
       disabled={busyId === job.job_id}
       title={job.status === 'waiting_for_source' ? '重新寻找可信来源并继续原任务' : '从已保留进度继续'}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
