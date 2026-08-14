@@ -10,6 +10,7 @@ from xunlei_zhiqu_runtime.providers.base import (
     ModelAnalysisResult,
     ModelProgressSink,
     ModelProviderAdapter,
+    StructuredModelResult,
 )
 
 
@@ -71,6 +72,21 @@ class EvidenceWireProvider(ModelProviderAdapter):
             stats.saved_percent,
         )
         return await self._inner.analyze_with_metrics(compact_pack, progress=progress)
+
+    async def generate_structured(
+        self,
+        *,
+        system_prompt: str,
+        document: object,
+        max_completion_tokens: int = 512,
+        temperature: float = 0.1,
+    ) -> StructuredModelResult:
+        return await self._inner.generate_structured(
+            system_prompt=system_prompt,
+            document=document,
+            max_completion_tokens=max_completion_tokens,
+            temperature=temperature,
+        )
 
     async def aclose(self) -> None:
         await self._inner.aclose()
