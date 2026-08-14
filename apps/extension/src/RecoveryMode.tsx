@@ -46,7 +46,8 @@ export function RecoveryMode({ recovery, onRefresh }: Props) {
         throw new Error(response?.error || '当前页面没有发现可用下载项');
       }
       submittedKey.current = key;
-      applyResult(await zhiquService.submitRecoveryCapture(current.recovery_id, response.batch as CaptureBatch));
+      const recoveryBatch = sanitizeRecoveryCapture(response.batch as CaptureBatch);
+      applyResult(await zhiquService.submitRecoveryCapture(current.recovery_id, recoveryBatch));
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : '寻找可用来源失败');
     } finally {
@@ -157,6 +158,26 @@ export function usePendingRecovery() {
     };
   }, [refresh]);
   return { recovery, refresh };
+}
+
+function sanitizeRecoveryCapture(batch: CaptureBatch): CaptureBatch {
+  return {
+    ...batch,
+    candidates: batch.candidates.map((candidate) => ({
+      ...candidate,
+      display_name: redactModelText(candidate.display_name),
+      anchor_text: redactModelText(candidate.anchor_text),
+      nearby_text: redactModelText(candidate.nearby_text),
+      section_heading: redactModelText(candidate.section_heading),
+    })),
+  };
+}
+
+function redactModelText(value: string | null | undefined): string | null | undefined {
+  if (!value) return value;
+  return value
+    .replace(/https?:\/\/[^\s<>'\"]+/gi, '[link]')
+    .replace(/\b(token|signature|sig|auth|authorization|api[_-]?key)=([^\s&]+)/gi, '$1=[redacted]');
 }
 
 function sameRecoveryPage(current: string, original: string): boolean {
