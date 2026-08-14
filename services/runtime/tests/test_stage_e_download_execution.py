@@ -22,9 +22,12 @@ from xunlei_zhiqu_runtime.services.download_executor import (
 )
 from xunlei_zhiqu_runtime.services.http_download_executor import HttpDownloadExecutor
 from xunlei_zhiqu_runtime.services.job_store import (
+    _reset_job_store_for_tests,
     cancel_job,
     create_manual_job,
     get_job,
+    list_jobs,
+    list_link_history,
     project_execution_status,
 )
 
@@ -104,6 +107,13 @@ BASE_REQUEST = {
         ],
     },
 }
+
+
+@pytest.fixture(autouse=True)
+def clean_job_store():
+    _reset_job_store_for_tests(fixtures_enabled=False)
+    yield
+    _reset_job_store_for_tests(fixtures_enabled=False)
 
 
 def test_execution_compiler_groups_only_deterministic_same_resource() -> None:
@@ -207,6 +217,126 @@ def test_real_job_never_uses_demo_progress_and_projects_executor_truth(tmp_path:
         cancel_job(job.job_id)
 
 
+def test_connection_failure_projects_to_interrupted_not_source_recovery(tmp_path: Path) -> None:
+    job = create_manual_job(
+        ManualJobCreateRequest(
+            schema_version="0.1",
+            links=["https://example.test/interrupted.zip"],
+            title="interrupted.zip",
+            delivery_target="local",
+        ),
+        execution_mode="download_engine",
+        total_bytes_override=1000,
+        destination_override=str(tmp_path),
+    )
+
+    projected = project_execution_status(
+        job.job_id,
+        DownloadExecutionStatus(
+            state="failed",
+            downloaded_bytes=420,
+            total_bytes=1000,
+            error="下载连接已中断",
+            failure_kind="connection_interrupted",
+            destination=str(tmp_path),
+        ),
+    )
+
+    assert projected is not None
+    assert projected.status == "interrupted"
+    assert projected.status != "waiting_for_source"
+    assert projected.next_action is None
+    assert projected.issue == "下载连接已中断"
+    assert projected.speed_bytes_per_second == 0
+    history = next(item for item in list_link_history() if item.job_id == job.job_id)
+    assert history.status == "active"
+
+
+def test_paused_execution_projects_zero_speed_and_resume_action(tmp_path: Path) -> None:
+    job = create_manual_job(
+        ManualJobCreateRequest(
+            schema_version="0.1",
+            links=["https://example.test/pause.zip"],
+            delivery_target="local",
+        ),
+        execution_mode="download_engine",
+        total_bytes_override=1000,
+        destination_override=str(tmp_path),
+    )
+    projected = project_execution_status(
+        job.job_id,
+        DownloadExecutionStatus(
+            state="paused",
+            downloaded_bytes=250,
+            total_bytes=1000,
+            speed_bytes_per_second=0,
+            destination=str(tmp_path),
+        ),
+    )
+    assert projected is not None
+    assert projected.status == "paused"
+    assert projected.speed_bytes_per_second == 0
+    assert projected.next_action == "resume"
+
+
+def test_waiting_for_source_remains_a_valid_public_state(tmp_path: Path) -> None:
+    snapshot = _job("job_waiting_fixture", tmp_path).model_dump(mode="python")
+    snapshot.update(
+        status="waiting_for_source",
+        stage_label="需要续取",
+        issue="当前来源需要重新处理",
+        next_action="continue_acquisition",
+    )
+    validated = ResourceJobSnapshot.model_validate(snapshot)
+    assert validated.status == "waiting_for_source"
+    assert validated.next_action == "continue_acquisition"
+
+
+def test_task_fixtures_are_disabled_by_default_and_explicit_when_requested() -> None:
+    _reset_job_store_for_tests(fixtures_enabled=False)
+    assert list_jobs() == []
+
+    _reset_job_store_for_tests(fixtures_enabled=True)
+    jobs = list_jobs()
+    assert any(job.title == "Example App 5.2.1" for job in jobs)
+
+
+def test_multi_asset_projection_uses_aggregate_bytes_and_current_asset_label(tmp_path: Path) -> None:
+    job = create_manual_job(
+        ManualJobCreateRequest(
+            schema_version="0.1",
+            links=[
+                "https://example.test/main.zip",
+                "https://example.test/language.zip",
+            ],
+            title="Example Software",
+            delivery_target="local",
+        ),
+        execution_mode="download_engine",
+        total_bytes_override=300,
+        destination_override=str(tmp_path),
+    )
+    projected = project_execution_status(
+        job.job_id,
+        DownloadExecutionStatus(
+            state="downloading",
+            downloaded_bytes=150,
+            total_bytes=300,
+            speed_bytes_per_second=50,
+            eta_seconds=3,
+            current_asset_id="asset_2",
+            current_asset_label="中文语言包",
+            destination=str(tmp_path),
+        ),
+    )
+    assert projected is not None
+    assert projected.title == "Example Software"
+    assert projected.progress == 50.0
+    assert projected.downloaded_bytes == 150
+    assert projected.total_bytes == 300
+    assert projected.stage_label == "正在下载 中文语言包"
+
+
 def test_http_executor_rejects_non_http_and_manifest_assets(tmp_path: Path) -> None:
     executor = HttpDownloadExecutor(tmp_path)
     with pytest.raises(ValueError):
@@ -273,6 +403,75 @@ async def test_http_executor_writes_part_pauses_resumes_and_renames(tmp_path: Pa
         assert final.exists()
         assert final.read_bytes() == payload
         assert not part.exists()
+    finally:
+        await executor.aclose()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_http_404_is_interruption_fact_and_cannot_resume(tmp_path: Path) -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _status_handler(404))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    executor = HttpDownloadExecutor(tmp_path)
+    job = _job("job_http_404", tmp_path)
+    request = DownloadExecutionRequest(
+        job=job,
+        assets=(
+            DownloadExecutionAsset(
+                asset_id="asset_1",
+                label="missing.bin",
+                filename_hint="missing.bin",
+                primary_source=f"http://127.0.0.1:{server.server_port}/missing.bin",
+            ),
+        ),
+    )
+
+    try:
+        await executor.create(request)
+        status = await _wait_until(lambda: executor.status(job.job_id), state="failed")
+        assert status.failure_kind == "http_error"
+        assert status.http_status_code == 404
+        assert status.error == "服务器未找到文件"
+        with pytest.raises(ValueError, match="下载已中断"):
+            await executor.resume(job.job_id)
+    finally:
+        await executor.aclose()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_connection_interruption_keeps_partial_file(tmp_path: Path) -> None:
+    payload = b"keep-part" * 40_000
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _truncated_handler(payload))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    executor = HttpDownloadExecutor(tmp_path)
+    job = _job("job_http_interrupted", tmp_path)
+    request = DownloadExecutionRequest(
+        job=job,
+        assets=(
+            DownloadExecutionAsset(
+                asset_id="asset_1",
+                label="partial.bin",
+                filename_hint="partial.bin",
+                primary_source=f"http://127.0.0.1:{server.server_port}/partial.bin",
+                expected_bytes=len(payload) * 2,
+            ),
+        ),
+    )
+
+    try:
+        await executor.create(request)
+        status = await _wait_until(lambda: executor.status(job.job_id), state="failed")
+        parts = list(tmp_path.glob("*.part"))
+        assert parts and parts[0].stat().st_size > 0
+        assert status.failure_kind in {"connection_interrupted", "length_mismatch"}
+        assert status.downloaded_bytes > 0
     finally:
         await executor.aclose()
         server.shutdown()
@@ -356,6 +555,38 @@ def _slow_handler(payload: bytes):
                 except (BrokenPipeError, ConnectionResetError):
                     break
                 time.sleep(0.006)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    return Handler
+
+
+def _status_handler(status_code: int):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(status_code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    return Handler
+
+
+def _truncated_handler(payload: bytes):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload) * 2))
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="partial.bin"')
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
+            self.wfile.flush()
+            self.close_connection = True
 
         def log_message(self, format: str, *args: object) -> None:
             return None

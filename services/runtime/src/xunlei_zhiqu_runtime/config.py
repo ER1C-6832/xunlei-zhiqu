@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     plan_cache_ttl_seconds: float = 1200.0
     plan_cache_max_entries: int = 64
 
-    # Stage E-A: real local HTTP execution is the product default. `noop` remains
-    # available only for fixtures/fallbacks and keeps Stage-B demo semantics.
+    # Stage E: real local HTTP execution is the product default. `noop` remains
+    # available only as an executor fixture/fallback; it does not enable UI jobs.
     download_executor: Literal["http", "noop"] = "http"
     download_directory: str = ""
+    # Stage-B task fixtures are a separate, explicit UI-development switch.
+    task_fixtures_enabled: bool = False
 
     runtime_host: str = "127.0.0.1"
     runtime_port: int = 8765

@@ -18,7 +18,6 @@ import {
   FileImage,
   FileText,
   Filter,
-  FolderOpen,
   HardDrive,
   HardDriveDownload,
   History,
@@ -47,6 +46,7 @@ import { taskService, type RuntimeInfo } from './services/taskServiceClient';
 
 const SETTINGS_KEY = 'xunlei-zhiqu.stage-b.readable.preferences';
 const CLOUD_TOTAL_BYTES = 3 * 1024 ** 4;
+const TASK_CENTER_FIXTURES_ENABLED = import.meta.env.VITE_TASK_CENTER_FIXTURES?.trim().toLowerCase() === 'true';
 
 type PageKey = 'downloads' | 'cloud' | 'links';
 type DownloadTab = 'active' | 'completed';
@@ -58,9 +58,9 @@ type TaskStateFilter = 'all' | 'running' | 'paused' | 'issue';
 type SortMode = 'newest' | 'progress' | 'speed';
 type ToastState = { message: string; tone?: 'normal' | 'warning' } | null;
 type TaskFilter = { kind: TaskKindFilter; state: TaskStateFilter; sort: SortMode };
-type Preferences = { refreshMs: 1500 | 3000 | 5000; showTechnical: boolean; notifications: boolean };
+type Preferences = { refreshMs: 1500 | 3000 | 5000; notifications: boolean };
 
-const defaultPreferences: Preferences = { refreshMs: 1500, showTechnical: true, notifications: true };
+const defaultPreferences: Preferences = { refreshMs: 1500, notifications: true };
 
 const fallbackJobs: ResourceJobSnapshot[] = [
   {
@@ -83,7 +83,7 @@ const fallbackJobs: ResourceJobSnapshot[] = [
     delivery_target: 'local',
     execution_mode: 'demo',
     resource_type: 'software',
-    plan_overview: '节点 A 已选出当前设备适合的 Windows x64 版本，并保留必要附件与备用来源。',
+    plan_overview: '已选择当前电脑适合的 Windows x64 版本，并保留语言包与校验文件。',
     selected_items: ['Windows x64 便携版', '中文语言包', 'SHA-256 校验文件'],
     alternative_count: 2,
     source_page: 'https://example.test/downloads'
@@ -130,7 +130,7 @@ const fallbackJobs: ResourceJobSnapshot[] = [
     delivery_target: 'cloud',
     execution_mode: 'demo',
     resource_type: 'video',
-    plan_overview: '智取结果已写入云盘交付记录，不在任务中心模拟“云盘下载速度”。',
+    plan_overview: '已选择 1080p 主视频和中文字幕。',
     selected_items: ['1080p 主视频组', '简体中文字幕'],
     alternative_count: 2,
     source_page: 'https://media.example.test/course'
@@ -157,10 +157,11 @@ const fallbackLibrary: LinkHistoryItem[] = [
 
 export function StageBReadableApp() {
   const [page, setPage] = useState<PageKey>(() => pageFromHash());
-  const [jobs, setJobs] = useState<ResourceJobSnapshot[]>(fallbackJobs);
-  const [library, setLibrary] = useState<LinkHistoryItem[]>(fallbackLibrary);
+  const [jobs, setJobs] = useState<ResourceJobSnapshot[]>(() => TASK_CENTER_FIXTURES_ENABLED ? fallbackJobs : []);
+  const [library, setLibrary] = useState<LinkHistoryItem[]>(() => TASK_CENTER_FIXTURES_ENABLED ? fallbackLibrary : []);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [runtimeConnected, setRuntimeConnected] = useState(false);
+  const [hasLoadedRuntime, setHasLoadedRuntime] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const [tab, setTab] = useState<DownloadTab>('active');
   const [libraryTab, setLibraryTab] = useState<LibraryTab>('history');
@@ -188,6 +189,7 @@ export function StageBReadableApp() {
       setLibrary(nextLibrary);
       setRuntimeInfo(nextRuntimeInfo);
       setRuntimeConnected(true);
+      setHasLoadedRuntime(true);
     } catch (error) {
       setRuntimeConnected(false);
       if (showError) setToast({ message: error instanceof Error ? `刷新失败：${error.message}` : '刷新失败', tone: 'warning' });
@@ -221,9 +223,11 @@ export function StageBReadableApp() {
   const cloudJobs = useMemo(() => jobs.filter((job) => job.delivery_target === 'cloud'), [jobs]);
   const activeLocalCount = localJobs.filter((job) => job.status !== 'completed').length;
   const completedLocalCount = localJobs.filter((job) => job.status === 'completed').length;
-  const totalSpeed = localJobs.filter((job) => job.status === 'downloading').reduce((sum, job) => sum + job.speed_bytes_per_second, 0);
+  const totalSpeed = localJobs
+    .filter((job) => job.status === 'downloading')
+    .reduce((sum, job) => sum + job.speed_bytes_per_second, 0);
   const favoriteCount = library.filter((item) => item.favorite).length;
-  const issueCount = jobs.filter((job) => job.status === 'waiting_for_source').length;
+  const issueCount = jobs.filter(isIssueJob).length;
   const cloudUsedBytes = cloudJobs.reduce((sum, job) => sum + Math.max(job.total_bytes, job.downloaded_bytes), 0);
   const cloudRemainingBytes = Math.max(0, CLOUD_TOTAL_BYTES - cloudUsedBytes);
   const cloudUsedPercent = Math.min(100, cloudUsedBytes / CLOUD_TOTAL_BYTES * 100);
@@ -237,7 +241,7 @@ export function StageBReadableApp() {
       const matchesState = taskFilter.state === 'all'
         || (taskFilter.state === 'running' && ['planning', 'downloading', 'verifying'].includes(job.status))
         || (taskFilter.state === 'paused' && job.status === 'paused')
-        || (taskFilter.state === 'issue' && job.status === 'waiting_for_source');
+        || (taskFilter.state === 'issue' && isIssueJob(job));
       return matchesTab && matchesQuery && matchesKind && matchesState;
     });
     return sortJobs(filtered, taskFilter.sort);
@@ -278,12 +282,16 @@ export function StageBReadableApp() {
       setToast({ message: `云盘位置：${job.destination || '迅雷云盘 / 智取下载'}` });
       return;
     }
+    if (job.status === 'interrupted') {
+      setToast({ message: job.issue || '下载已中断，当前不能继续', tone: 'warning' });
+      return;
+    }
     if (job.status === 'waiting_for_source') {
-      setToast({ message: '当前来源不可用，重新智取将在阶段 F 接入。', tone: 'warning' });
+      setToast({ message: job.issue || '当前来源需要重新处理', tone: 'warning' });
       return;
     }
     if (job.status === 'completed') {
-      await copyText(job.destination || '未设置交付位置', '本地交付位置已复制');
+      await copyText(job.destination || '未设置保存位置', '保存位置已复制');
       return;
     }
     const operation = job.status === 'paused' ? 'resume' : 'pause';
@@ -365,7 +373,7 @@ export function StageBReadableApp() {
     }
   }
 
-  const notifications = jobs.filter((job) => job.status === 'waiting_for_source');
+  const notifications = jobs.filter(isIssueJob);
 
   return (
     <div className="readable-stage-b">
@@ -393,7 +401,7 @@ export function StageBReadableApp() {
           <label className="rr-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={page === 'links' ? '搜索链接、文件名' : page === 'cloud' ? '搜索云盘文件' : '搜索任务、文件名'} /></label>
           <button className="rr-new" type="button" onClick={() => setNewTaskOpen(true)}><Plus size={18} />新建</button>
           <div className="rr-top-spacer" />
-          <span className={`rr-runtime ${runtimeConnected ? 'online' : ''}`}><i />Runtime</span>
+          <span className={`rr-runtime ${runtimeConnected ? 'online' : ''}`}><i />本地服务</span>
           <div className="rr-popover-anchor">
             <button className="rr-top-icon" type="button" aria-label="通知" onClick={() => setTopPopover(topPopover === 'notifications' ? null : 'notifications')}>
               <Bell size={18} />{preferences.notifications && issueCount > 0 && <b>{issueCount}</b>}
@@ -402,7 +410,7 @@ export function StageBReadableApp() {
           </div>
           <div className="rr-popover-anchor">
             <button className="rr-user" type="button" onClick={() => setTopPopover(topPopover === 'user' ? null : 'user')}>
-              <span><UserRound size={17} /></span><div><strong>本地用户</strong><small>{runtimeConnected ? 'Runtime 在线' : '离线模式'}</small></div><ChevronDown size={15} />
+              <span><UserRound size={17} /></span><div><strong>本地用户</strong><small>{runtimeConnected ? '服务在线' : '服务未连接'}</small></div><ChevronDown size={15} />
             </button>
             {topPopover === 'user' && <UserPopover runtimeInfo={runtimeInfo} onSettings={() => { setSettingsOpen(true); setTopPopover(null); }} />}
           </div>
@@ -420,6 +428,8 @@ export function StageBReadableApp() {
             filter={taskFilter}
             filterOpen={filterOpen}
             batchOpen={batchOpen}
+            runtimeConnected={runtimeConnected}
+            hasLoadedRuntime={hasLoadedRuntime}
             onTab={(next) => { setTab(next); setSelectedId(''); }}
             onSelect={toggleTask}
             onAction={(job) => void handleJobAction(job)}
@@ -431,7 +441,6 @@ export function StageBReadableApp() {
             onPauseAll={() => void handleBatch('pause')}
             onResumeAll={() => void handleBatch('resume')}
             onCopy={(value) => void copyText(value)}
-            showTechnical={preferences.showTechnical}
           />
         )}
 
@@ -444,7 +453,6 @@ export function StageBReadableApp() {
             selectedId={selectedId}
             onSelect={toggleTask}
             onCopy={(value) => void copyText(value)}
-            showTechnical={preferences.showTechnical}
           />
         )}
 
@@ -498,6 +506,8 @@ function DownloadPage(props: {
   filter: TaskFilter;
   filterOpen: boolean;
   batchOpen: boolean;
+  runtimeConnected: boolean;
+  hasLoadedRuntime: boolean;
   onTab: (tab: DownloadTab) => void;
   onSelect: (jobId: string) => void;
   onAction: (job: ResourceJobSnapshot) => void;
@@ -509,10 +519,10 @@ function DownloadPage(props: {
   onPauseAll: () => void;
   onResumeAll: () => void;
   onCopy: (value: string) => void;
-  showTechnical: boolean;
 }) {
-  const { jobs, tab, activeCount, completedCount, totalSpeed, selectedId, actionJobId, filter, filterOpen, batchOpen, onTab, onSelect, onAction, onCancel, onFilterOpen, onFilter, onBatchOpen, onRefresh, onPauseAll, onResumeAll, onCopy, showTechnical } = props;
+  const { jobs, tab, activeCount, completedCount, totalSpeed, selectedId, actionJobId, filter, filterOpen, batchOpen, runtimeConnected, hasLoadedRuntime, onTab, onSelect, onAction, onCancel, onFilterOpen, onFilter, onBatchOpen, onRefresh, onPauseAll, onResumeAll, onCopy } = props;
   const activeFilterCount = Number(filter.kind !== 'all') + Number(filter.state !== 'all') + Number(filter.sort !== 'newest');
+  const disconnectedEmpty = !runtimeConnected && !hasLoadedRuntime && !TASK_CENTER_FIXTURES_ENABLED;
   return (
     <section className="rr-page">
       <div className="rr-page-tabs">
@@ -523,7 +533,7 @@ function DownloadPage(props: {
         <div className="rr-popover-anchor"><button className="rr-icon-button" type="button" onClick={onBatchOpen} title="更多"><MoreHorizontal size={19} /></button>{batchOpen && <BatchMenu onRefresh={onRefresh} onPauseAll={onPauseAll} onResumeAll={onResumeAll} />}</div>
       </div>
       <div className="rr-toolbar">
-        <div className="rr-speed"><strong>{totalSpeed > 0 && tab === 'active' ? formatSpeed(totalSpeed) : tab === 'active' ? activeCount : completedCount}</strong><span>{totalSpeed > 0 && tab === 'active' ? '当前总速度' : tab === 'active' ? '个进行中任务' : '个已完成任务'}</span></div>
+        <div className="rr-speed"><strong>{tab === 'active' ? formatSpeed(totalSpeed) : completedCount}</strong><span>{tab === 'active' ? '当前总速度' : '个已完成任务'}</span></div>
         <span className="rr-toolbar-copy">本地下载任务</span>
         <div className="rr-toolbar-actions"><span className="rr-list-label"><ListChecks size={16} />列表</span><div className="rr-popover-anchor"><button className={`rr-filter-button ${activeFilterCount ? 'active' : ''}`} type="button" onClick={onFilterOpen}><Filter size={16} />筛选{activeFilterCount > 0 && <b>{activeFilterCount}</b>}</button>{filterOpen && <TaskFilterPopover filter={filter} onChange={onFilter} />}</div></div>
       </div>
@@ -532,10 +542,10 @@ function DownloadPage(props: {
         {jobs.map((job) => (
           <Fragment key={job.job_id}>
             <TaskRow job={job} selected={selectedId === job.job_id} busy={actionJobId === job.job_id} onSelect={() => onSelect(job.job_id)} onAction={() => onAction(job)} />
-            {selectedId === job.job_id && <InlineTaskDetails job={job} busy={actionJobId === job.job_id} showTechnical={showTechnical} onCopy={onCopy} onAction={() => onAction(job)} onCancel={() => onCancel(job)} />}
+            {selectedId === job.job_id && <InlineTaskDetails job={job} busy={actionJobId === job.job_id} onCopy={onCopy} onAction={() => onAction(job)} onCancel={() => onCancel(job)} />}
           </Fragment>
         ))}
-        {!jobs.length && <EmptyState icon={<Download size={30} />} title="暂无任务" detail="新任务会自动出现在这里。" />}
+        {!jobs.length && <EmptyState icon={<Download size={30} />} title={disconnectedEmpty ? '本地服务未连接' : '暂无任务'} detail={disconnectedEmpty ? '当前无法读取下载任务。' : '新任务会自动出现在这里。'} />}
       </div>
     </section>
   );
@@ -544,36 +554,42 @@ function DownloadPage(props: {
 function TaskRow({ job, selected, busy, onSelect, onAction }: { job: ResourceJobSnapshot; selected: boolean; busy: boolean; onSelect: () => void; onAction: () => void }) {
   const completed = job.status === 'completed';
   const paused = job.status === 'paused';
+  const interrupted = job.status === 'interrupted';
   const waiting = job.status === 'waiting_for_source';
+  const issue = interrupted || waiting;
+  const knownTotal = job.total_bytes > 0;
   return (
-    <article className={`rr-task-row ${selected ? 'selected' : ''} ${waiting ? 'issue' : ''}`}>
+    <article className={`rr-task-row ${selected ? 'selected' : ''} ${issue ? 'issue' : ''}`}>
       <button className="rr-task-open" type="button" onClick={onSelect}>
         <span className={`rr-file-icon ${job.kind === 'zhiqu' ? 'zhiqu' : ''}`}>{job.kind === 'zhiqu' ? <Sparkles size={22} /> : <HardDriveDownload size={22} />}</span>
         <span className="rr-task-name"><span><strong>{job.title}</strong>{job.kind === 'zhiqu' && <i>智取</i>}</span><small>{job.subtitle}</small><em>{job.source_page ? shortHost(job.source_page) : '本地任务'}</em></span>
-        <span className="rr-task-progress">{completed ? <><strong>{formatBytes(job.total_bytes)}</strong><small>{formatDateTime(job.created_at)}</small></> : <><span className="rr-progress"><i className={waiting ? 'warning' : paused ? 'paused' : ''} style={{ width: `${job.progress}%` }} /></span><small>{formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)} · {job.progress.toFixed(1)}%</small></>}</span>
-        <span className="rr-task-status">{waiting ? <><strong className="warning">需要续取</strong><small>{job.stage_label}</small></> : completed ? <><strong>已完成</strong><small>{job.destination || '交付完成'}</small></> : paused ? <><strong>已暂停</strong><small>{job.progress.toFixed(1)}%</small></> : <><strong>{job.speed_bytes_per_second > 0 ? formatSpeed(job.speed_bytes_per_second) : `${job.progress.toFixed(1)}%`}</strong><small>{job.eta_seconds ? `剩余 ${formatEta(job.eta_seconds)}` : job.stage_label}</small></>}</span>
+        <span className="rr-task-progress">{completed ? <><strong>{formatBytes(job.total_bytes)}</strong><small>{formatDateTime(job.created_at)}</small></> : knownTotal ? <><span className="rr-progress"><i className={issue ? 'warning' : paused ? 'paused' : ''} style={{ width: `${job.progress}%` }} /></span><small>{formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)} · {job.progress.toFixed(1)}%</small></> : <><span className="rr-progress unknown" /><small>已下载 {formatBytes(job.downloaded_bytes)} · 总大小未知</small></>}</span>
+        <span className="rr-task-status">{interrupted ? <><strong className="warning">下载中断</strong><small>{job.issue || job.stage_label}</small></> : waiting ? <><strong className="warning">需要续取</strong><small>{job.issue || job.stage_label}</small></> : completed ? <><strong>已完成</strong><small>{job.destination || '下载完成'}</small></> : paused ? <><strong>已暂停</strong><small>{knownTotal ? `${job.progress.toFixed(1)}%` : `已下载 ${formatBytes(job.downloaded_bytes)}`}</small></> : <><strong>{job.status === 'downloading' && job.speed_bytes_per_second > 0 ? formatSpeed(job.speed_bytes_per_second) : job.status === 'planning' ? '准备下载' : job.stage_label}</strong><small>{job.eta_seconds ? `剩余 ${formatEta(job.eta_seconds)}` : job.stage_label}</small></>}</span>
       </button>
-      <button className={`rr-row-action ${waiting ? 'warning' : ''}`} type="button" onClick={onAction} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18} /> : waiting ? <RefreshCw size={18} /> : completed ? <FolderOpen size={18} /> : paused ? <Play size={18} /> : <CirclePause size={19} />}</button>
+      {issue ? <span className="rr-row-action warning rr-row-status-only" aria-label={interrupted ? '下载中断' : '需要续取'}><TriangleAlert size={18} /></span> : <button className="rr-row-action" type="button" onClick={onAction} disabled={busy}>{busy ? <LoaderCircle className="spin" size={18} /> : completed ? <Copy size={18} /> : paused ? <Play size={18} /> : <CirclePause size={19} />}</button>}
     </article>
   );
 }
 
-function InlineTaskDetails({ job, busy, showTechnical, onCopy, onAction, onCancel }: { job: ResourceJobSnapshot; busy: boolean; showTechnical: boolean; onCopy: (value: string) => void; onAction: () => void; onCancel: () => void }) {
+function InlineTaskDetails({ job, busy, onCopy, onAction, onCancel }: { job: ResourceJobSnapshot; busy: boolean; onCopy: (value: string) => void; onAction: () => void; onCancel: () => void }) {
+  const interrupted = job.status === 'interrupted';
   const waiting = job.status === 'waiting_for_source';
   const completed = job.status === 'completed';
   const paused = job.status === 'paused';
+  const knownTotal = job.total_bytes > 0;
   const selectedItems = job.selected_items?.length ? job.selected_items : [job.subtitle];
+  const canControl = !interrupted && !waiting && !completed;
   return (
     <section className="rr-inline-detail" aria-label={`${job.title} 任务详情`}>
-      <div className="rr-detail-header"><div><strong>{job.title}</strong><span>{job.stage_label}</span></div><span className="rr-detail-progress">{job.progress.toFixed(1)}%</span></div>
-      {!completed && <div className="rr-detail-progressbar"><i className={waiting ? 'warning' : paused ? 'paused' : ''} style={{ width: `${job.progress}%` }} /></div>}
+      <div className="rr-detail-header"><div><strong>{job.title}</strong><span>{job.stage_label}</span></div><span className="rr-detail-progress">{knownTotal ? `${job.progress.toFixed(1)}%` : formatBytes(job.downloaded_bytes)}</span></div>
+      {!completed && knownTotal && <div className="rr-detail-progressbar"><i className={interrupted || waiting ? 'warning' : paused ? 'paused' : ''} style={{ width: `${job.progress}%` }} /></div>}
       <div className="rr-detail-grid">
-        <DetailBlock title="目标"><p>{job.plan_overview || job.subtitle}</p>{job.source_page && <button type="button" className="rr-link-button" onClick={() => window.open(job.source_page!, '_blank', 'noopener,noreferrer')}><Link2 size={15} />{shortHost(job.source_page)}</button>}</DetailBlock>
-        <DetailBlock title="选择"><div className="rr-selected-items">{selectedItems.map((item) => <span key={item}><Check size={14} />{item}</span>)}</div><small>来源 {job.source_count} · 备用 {job.alternative_count ?? 0} · 排除 {job.excluded_count}</small></DetailBlock>
-        <DetailBlock title="问题">{waiting ? <div className="rr-problem warning"><TriangleAlert size={18} /><span><strong>当前来源不可用</strong><small>{job.issue || '任务信息已保留。'}</small></span></div> : <div className="rr-problem healthy"><ShieldCheck size={18} /><span><strong>当前没有阻断问题</strong><small>{completed ? '任务已完成。' : paused ? '下载已暂停。' : '下载正常进行。'}</small></span></div>}</DetailBlock>
-        <DetailBlock title="下一步"><p>{waiting ? '当前来源需要重新处理。' : completed ? '查看或复制下载位置。' : paused ? '继续当前任务。' : '继续当前下载。'}</p><div className="rr-detail-actions"><button className="primary" type="button" onClick={onAction} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : waiting ? <RefreshCw size={16} /> : completed ? <FolderOpen size={16} /> : paused ? <Play size={16} /> : <CirclePause size={16} />}{waiting ? '重新智取' : completed ? '复制下载位置' : paused ? '继续任务' : '暂停任务'}</button>{!completed && <button type="button" onClick={onCancel} disabled={busy}><X size={15} />取消任务</button>}{job.destination && <button type="button" onClick={() => onCopy(job.destination!)}><Copy size={15} />复制路径</button>}</div></DetailBlock>
+        <DetailBlock title="下载"><p>{knownTotal ? `${formatBytes(job.downloaded_bytes)} / ${formatBytes(job.total_bytes)}` : `已下载 ${formatBytes(job.downloaded_bytes)} · 总大小未知`}</p><small>{job.status === 'downloading' && job.speed_bytes_per_second > 0 ? `${formatSpeed(job.speed_bytes_per_second)}${job.eta_seconds ? ` · 剩余 ${formatEta(job.eta_seconds)}` : ''}` : job.stage_label}</small></DetailBlock>
+        <DetailBlock title="保存位置"><p>{job.destination || '未设置保存位置'}</p>{job.destination && <button className="rr-link-button" type="button" onClick={() => onCopy(job.destination!)}><Copy size={15} />复制保存位置</button>}{job.source_page && <button type="button" className="rr-link-button" onClick={() => window.open(job.source_page!, '_blank', 'noopener,noreferrer')}><Link2 size={15} />来源页面</button>}</DetailBlock>
+        <DetailBlock title="资源"><div className="rr-selected-items">{selectedItems.map((item) => <span key={item}><Check size={14} />{item}</span>)}</div><small>{selectedItems.length} 个已选资源</small></DetailBlock>
+        <DetailBlock title="状态">{interrupted ? <div className="rr-problem warning"><TriangleAlert size={18} /><span><strong>下载中断</strong><small>{job.issue || '下载连接已中断。'}</small></span></div> : waiting ? <div className="rr-problem warning"><TriangleAlert size={18} /><span><strong>需要续取</strong><small>{job.issue || '当前来源需要重新处理。'}</small></span></div> : <div className="rr-problem healthy"><ShieldCheck size={18} /><span><strong>{completed ? '下载已完成' : paused ? '下载已暂停' : '下载正常'}</strong><small>{completed ? '文件已经保存完成。' : paused ? '当前进度已保留。' : job.stage_label}</small></span></div>}</DetailBlock>
+        <DetailBlock title="操作"><p>{interrupted ? (job.downloaded_bytes > 0 ? '下载已中断，已保留当前进度。' : '下载连接已中断。') : waiting ? '当前来源需要重新处理。' : completed ? '可以复制保存位置。' : paused ? '继续当前下载。' : '可以暂停当前下载。'}</p><div className="rr-detail-actions">{completed && <button className="primary" type="button" onClick={onAction} disabled={busy}><Copy size={16} />复制保存位置</button>}{canControl && <button className="primary" type="button" onClick={onAction} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : paused ? <Play size={16} /> : <CirclePause size={16} />}{paused ? '继续任务' : '暂停任务'}</button>}{!completed && <button type="button" onClick={onCancel} disabled={busy}><X size={15} />取消任务</button>}</div></DetailBlock>
       </div>
-      {showTechnical && <div className="rr-technical">Runtime · {job.execution_mode === 'download_engine' ? 'Download Engine' : 'Stage B 演示执行'} · {job.job_id}</div>}
     </section>
   );
 }
@@ -582,12 +598,12 @@ function DetailBlock({ title, children }: { title: string; children: ReactNode }
   return <section className="rr-detail-block"><h3>{title}</h3><div>{children}</div></section>;
 }
 
-function CloudPage({ jobs, usedBytes, remainingBytes, usedPercent, selectedId, onSelect, onCopy, showTechnical }: { jobs: ResourceJobSnapshot[]; usedBytes: number; remainingBytes: number; usedPercent: number; selectedId: string; onSelect: (jobId: string) => void; onCopy: (value: string) => void; showTechnical: boolean }) {
+function CloudPage({ jobs, usedBytes, remainingBytes, usedPercent, selectedId, onSelect, onCopy }: { jobs: ResourceJobSnapshot[]; usedBytes: number; remainingBytes: number; usedPercent: number; selectedId: string; onSelect: (jobId: string) => void; onCopy: (value: string) => void }) {
   return (
     <section className="rr-page rr-cloud-page">
       <div className="rr-cloud-header">
-        <div className="rr-cloud-title"><span><Cloud size={26} /></span><div><strong>迅雷云盘</strong><small>智取资源保存到云盘后直接进入文件列表，不模拟“保存中”下载过程。</small></div></div>
-        <div className="rr-cloud-space"><div><strong>{formatBytes(remainingBytes)} 可用</strong><span>已用 {formatBytes(usedBytes)} / {formatBytes(CLOUD_TOTAL_BYTES)} · 演示空间</span></div><span className="rr-capacity-bar"><i style={{ width: `${Math.max(1.5, usedPercent)}%` }} /></span></div>
+        <div className="rr-cloud-title"><span><Cloud size={26} /></span><div><strong>迅雷云盘</strong><small>智取资源保存到云盘后直接进入文件列表。</small></div></div>
+        <div className="rr-cloud-space"><div><strong>{formatBytes(remainingBytes)} 可用</strong><span>已用 {formatBytes(usedBytes)} / {formatBytes(CLOUD_TOTAL_BYTES)}</span></div><span className="rr-capacity-bar"><i style={{ width: `${Math.max(1.5, usedPercent)}%` }} /></span></div>
       </div>
       <div className="rr-cloud-toolbar"><div><strong>最近保存</strong><span>{jobs.length} 个云盘资源</span></div><button type="button"><List size={17} />列表</button></div>
       <div className="rr-cloud-head"><span>文件名</span><span>大小</span><span>保存时间</span><span>位置</span></div>
@@ -597,7 +613,7 @@ function CloudPage({ jobs, usedBytes, remainingBytes, usedPercent, selectedId, o
             <article className={`rr-cloud-row ${selectedId === job.job_id ? 'selected' : ''}`}>
               <button type="button" onClick={() => onSelect(job.job_id)}><span className="rr-file-icon cloud"><Cloud size={22} /></span><span className="rr-cloud-name"><strong>{job.title}</strong><small>{job.subtitle}</small></span><strong className="rr-cloud-size">{formatBytes(job.total_bytes)}</strong><span>{formatDateTime(job.created_at)}</span><span>{job.destination || '迅雷云盘 / 智取下载'}</span></button>
             </article>
-            {selectedId === job.job_id && <InlineCloudDetails job={job} showTechnical={showTechnical} onCopy={onCopy} />}
+            {selectedId === job.job_id && <InlineCloudDetails job={job} onCopy={onCopy} />}
           </Fragment>
         ))}
         {!jobs.length && <EmptyState icon={<Cloud size={30} />} title="云盘还没有资源" detail="在智取扩展或新建任务中选择“保存到云盘”。" />}
@@ -606,8 +622,8 @@ function CloudPage({ jobs, usedBytes, remainingBytes, usedPercent, selectedId, o
   );
 }
 
-function InlineCloudDetails({ job, showTechnical, onCopy }: { job: ResourceJobSnapshot; showTechnical: boolean; onCopy: (value: string) => void }) {
-  return <section className="rr-inline-detail rr-cloud-detail"><div className="rr-detail-grid"><DetailBlock title="资源"><p>{job.plan_overview || job.subtitle}</p></DetailBlock><DetailBlock title="云盘位置"><p>{job.destination || '迅雷云盘 / 智取下载'}</p><button className="rr-link-button" type="button" onClick={() => onCopy(job.destination || '迅雷云盘 / 智取下载')}><Copy size={15} />复制位置</button></DetailBlock><DetailBlock title="智取选择"><div className="rr-selected-items">{(job.selected_items || [job.subtitle]).map((item) => <span key={item}><Check size={14} />{item}</span>)}</div></DetailBlock><DetailBlock title="状态"><div className="rr-problem healthy"><ShieldCheck size={18} /><span><strong>已进入云盘</strong><small>云盘页不展示下载速度和“保存中”进度。</small></span></div></DetailBlock></div>{showTechnical && <div className="rr-technical">ResourceJob · {job.job_id}</div>}</section>;
+function InlineCloudDetails({ job, onCopy }: { job: ResourceJobSnapshot; onCopy: (value: string) => void }) {
+  return <section className="rr-inline-detail rr-cloud-detail"><div className="rr-detail-grid"><DetailBlock title="资源"><p>{job.plan_overview || job.subtitle}</p></DetailBlock><DetailBlock title="云盘位置"><p>{job.destination || '迅雷云盘 / 智取下载'}</p><button className="rr-link-button" type="button" onClick={() => onCopy(job.destination || '迅雷云盘 / 智取下载')}><Copy size={15} />复制位置</button></DetailBlock><DetailBlock title="智取选择"><div className="rr-selected-items">{(job.selected_items || [job.subtitle]).map((item) => <span key={item}><Check size={14} />{item}</span>)}</div></DetailBlock><DetailBlock title="状态"><div className="rr-problem healthy"><ShieldCheck size={18} /><span><strong>已进入云盘</strong><small>资源已保存到云盘。</small></span></div></DetailBlock></div></section>;
 }
 
 function LinkLibraryPage({ items, tab, filter, view, total, favorites, onTab, onFilter, onView, onFavorite, onOpen }: { items: LinkHistoryItem[]; tab: LibraryTab; filter: LibraryFilter; view: LibraryView; total: number; favorites: number; onTab: (tab: LibraryTab) => void; onFilter: (filter: LibraryFilter) => void; onView: (view: LibraryView) => void; onFavorite: (item: LinkHistoryItem) => void; onOpen: (item: LinkHistoryItem) => void }) {
@@ -637,7 +653,7 @@ function NotificationPopover({ jobs, onOpen }: { jobs: ResourceJobSnapshot[]; on
 }
 
 function UserPopover({ runtimeInfo, onSettings }: { runtimeInfo: RuntimeInfo | null; onSettings: () => void }) {
-  return <div className="rr-user-popover rr-popover"><div className="rr-user-profile"><span><UserRound size={21} /></span><div><strong>本地用户</strong><small>迅雷智取 Runtime</small></div></div><div className="rr-user-provider"><span>模型适配器</span><strong>{runtimeInfo?.provider || '未连接'}</strong></div><button type="button" onClick={onSettings}><Settings size={16} />设置</button><button type="button" onClick={onSettings}><Info size={16} />关于迅雷智取</button></div>;
+  return <div className="rr-user-popover rr-popover"><div className="rr-user-profile"><span><UserRound size={21} /></span><div><strong>本地用户</strong><small>迅雷智取本地服务</small></div></div><div className="rr-user-provider"><span>服务版本</span><strong>{runtimeInfo?.version || '未连接'}</strong></div><button type="button" onClick={onSettings}><Settings size={16} />设置</button><button type="button" onClick={onSettings}><Info size={16} />关于迅雷智取</button></div>;
 }
 
 function NewTaskModal({ onClose, onCreate }: { onClose: () => void; onCreate: (payload: ManualJobCreateRequest) => Promise<void> }) {
@@ -657,7 +673,7 @@ function NewTaskModal({ onClose, onCreate }: { onClose: () => void; onCreate: (p
 }
 
 function SettingsModal({ preferences, runtimeInfo, onChange, onClose }: { preferences: Preferences; runtimeInfo: RuntimeInfo | null; onChange: (preferences: Preferences) => void; onClose: () => void }) {
-  return <Modal title="设置" onClose={onClose} wide><div className="rr-settings"><section><h3>任务中心</h3><p>保持大字号和桌面客户端密度，优先保证 Demo 可读性。</p></section><SettingRow title="自动刷新" detail="Runtime 任务快照刷新频率"><select value={preferences.refreshMs} onChange={(event) => onChange({ ...preferences, refreshMs: Number(event.target.value) as Preferences['refreshMs'] })}><option value={1500}>1.5 秒</option><option value={3000}>3 秒</option><option value={5000}>5 秒</option></select></SettingRow><SettingRow title="显示技术状态" detail="在任务详情底部显示 Runtime 执行信息"><Toggle checked={preferences.showTechnical} onChange={(checked) => onChange({ ...preferences, showTechnical: checked })} /></SettingRow><SettingRow title="异常通知" detail="来源失效时在右上角提醒"><Toggle checked={preferences.notifications} onChange={(checked) => onChange({ ...preferences, notifications: checked })} /></SettingRow><div className="rr-about"><Bird size={28} /><div><strong>迅雷智取</strong><span>Runtime {runtimeInfo?.version || '0.1.0'} · {runtimeInfo?.provider || '未连接'}</span></div></div></div></Modal>;
+  return <Modal title="设置" onClose={onClose} wide><div className="rr-settings"><section><h3>任务中心</h3><p>下载状态会自动刷新。</p></section><SettingRow title="自动刷新" detail="下载任务状态刷新频率"><select value={preferences.refreshMs} onChange={(event) => onChange({ ...preferences, refreshMs: Number(event.target.value) as Preferences['refreshMs'] })}><option value={1500}>1.5 秒</option><option value={3000}>3 秒</option><option value={5000}>5 秒</option></select></SettingRow><SettingRow title="异常通知" detail="下载中断或来源问题时在右上角提醒"><Toggle checked={preferences.notifications} onChange={(checked) => onChange({ ...preferences, notifications: checked })} /></SettingRow><div className="rr-about"><Bird size={28} /><div><strong>迅雷智取</strong><span>本地服务 {runtimeInfo?.version || '未连接'}</span></div></div></div></Modal>;
 }
 
 function SettingRow({ title, detail, children }: { title: string; detail: string; children: ReactNode }) { return <div className="rr-setting-row"><div><strong>{title}</strong><span>{detail}</span></div>{children}</div>; }
@@ -665,6 +681,9 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (checked: b
 function Modal({ title, onClose, wide = false, children }: { title: string; onClose: () => void; wide?: boolean; children: ReactNode }) { return <div className="rr-modal-backdrop"><div className={`rr-modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true"><header><strong>{title}</strong><button type="button" onClick={onClose}><X size={19} /></button></header>{children}</div></div>; }
 function EmptyState({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) { return <div className="rr-empty"><span>{icon}</span><strong>{title}</strong><small>{detail}</small></div>; }
 
+function isIssueJob(job: ResourceJobSnapshot): boolean {
+  return job.status === 'interrupted' || job.status === 'waiting_for_source';
+}
 function classifyLibrary(item: LinkHistoryItem): LibraryFilter {
   if (item.resource_type === 'video' || item.resource_type === 'audio' || item.link_type === 'media') return 'media';
   if (item.resource_type === 'image') return 'image';
@@ -686,6 +705,6 @@ function shortHost(value: string): string { try { return new URL(value).host; } 
 function pageFromHash(): PageKey { const value = window.location.hash.replace(/^#\//, ''); return value === 'cloud' || value === 'links' ? value : 'downloads'; }
 function loadPreferences(): Preferences { try { const raw = window.localStorage.getItem(SETTINGS_KEY); return raw ? { ...defaultPreferences, ...JSON.parse(raw) as Partial<Preferences> } : defaultPreferences; } catch { return defaultPreferences; } }
 function formatBytes(value: number): string { if (!Number.isFinite(value) || value <= 0) return '0 B'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); const amount = value / 1024 ** index; return `${amount >= 100 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`; }
-function formatSpeed(value: number): string { if (!Number.isFinite(value) || value <= 0) return '0 KB/s'; if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(value >= 10 * 1024 ** 2 ? 1 : 2)} MB/s`; return `${(value / 1024).toFixed(1)} KB/s`; }
+function formatSpeed(value: number): string { if (!Number.isFinite(value) || value <= 0) return '0 B/s'; if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(value >= 10 * 1024 ** 2 ? 1 : 2)} MB/s`; return `${(value / 1024).toFixed(1)} KB/s`; }
 function formatEta(seconds: number): string { if (seconds < 60) return `${seconds} 秒`; const minutes = Math.floor(seconds / 60); const rest = seconds % 60; return `${minutes}:${String(rest).padStart(2, '0')}`; }
 function formatDateTime(value: string): string { const date = new Date(value); if (Number.isNaN(date.getTime())) return value; return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date); }

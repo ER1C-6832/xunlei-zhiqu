@@ -1,0 +1,9 @@
+.rr-row-status-only {
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+
+.rr-progress.unknown {
+  background: #eef0f3;
+}

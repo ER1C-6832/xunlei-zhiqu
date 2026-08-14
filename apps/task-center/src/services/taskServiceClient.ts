@@ -87,7 +87,7 @@ export class HttpTaskServiceClient implements TaskServiceClient {
   }
 
   getRuntimeInfo(): Promise<RuntimeInfo> {
-    return this.requestJson('/v1/health', { cache: 'no-store' }, '读取 Runtime 状态失败');
+    return this.requestJson('/v1/health', { cache: 'no-store' }, '读取本地服务状态失败');
   }
 
   private postAction(jobId: string, action: Extract<TaskAction, 'pause' | 'resume'>): Promise<ResourceJobSnapshot> {

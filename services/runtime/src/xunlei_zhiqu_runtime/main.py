@@ -47,6 +47,7 @@ from xunlei_zhiqu_runtime.services.job_store import (
     create_job,
     create_manual_job,
     get_job,
+    initialize_job_store,
     list_jobs as list_stored_jobs,
     list_link_history,
     pause_job,
@@ -63,6 +64,7 @@ logger = logging.getLogger("uvicorn.error")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    initialize_job_store(settings.task_fixtures_enabled)
     provider = create_provider(settings)
     session_token = (
         settings.runtime_static_session_token.get_secret_value()
@@ -300,7 +302,7 @@ async def list_jobs(request: Request) -> list[ResourceJobSnapshot]:
 async def read_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     job = get_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="ResourceJob not found")
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     return await _refresh_execution_job(request, job)
 
 
@@ -308,14 +310,17 @@ async def read_job(job_id: str, request: Request) -> ResourceJobSnapshot:
 async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     job = get_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="ResourceJob not found")
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     try:
         if job.execution_mode == "download_engine":
+            job = await _refresh_execution_job(request, job)
+            if job.status == "interrupted":
+                raise ValueError("下载已中断，当前不能暂停")
             await request.app.state.download_executor.pause(job_id)
             return await _refresh_execution_job(request, job)
         paused = pause_job(job_id)
         if paused is None:
-            raise HTTPException(status_code=404, detail="ResourceJob not found")
+            raise HTTPException(status_code=404, detail="下载任务不存在")
         await request.app.state.download_executor.pause(job_id)
         return paused
     except ValueError as exc:
@@ -326,14 +331,17 @@ async def pause_resource_job(job_id: str, request: Request) -> ResourceJobSnapsh
 async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnapshot:
     job = get_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="ResourceJob not found")
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     try:
         if job.execution_mode == "download_engine":
+            job = await _refresh_execution_job(request, job)
+            if job.status == "interrupted":
+                raise ValueError("下载已中断，当前不能继续")
             await request.app.state.download_executor.resume(job_id)
             return await _refresh_execution_job(request, job)
         resumed = resume_job(job_id)
         if resumed is None:
-            raise HTTPException(status_code=404, detail="ResourceJob not found")
+            raise HTTPException(status_code=404, detail="下载任务不存在")
         await request.app.state.download_executor.resume(job_id)
         return resumed
     except ValueError as exc:
@@ -344,10 +352,10 @@ async def resume_resource_job(job_id: str, request: Request) -> ResourceJobSnaps
 async def cancel_resource_job(job_id: str, request: Request) -> Response:
     job = get_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="ResourceJob not found")
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     await request.app.state.download_executor.cancel(job_id)
     if not cancel_job(job_id):
-        raise HTTPException(status_code=404, detail="ResourceJob not found")
+        raise HTTPException(status_code=404, detail="下载任务不存在")
     return Response(status_code=204)
 
 

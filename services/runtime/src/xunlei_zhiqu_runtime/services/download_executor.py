@@ -18,6 +18,13 @@ DownloadExecutionState = Literal[
     "failed",
     "cancelled",
 ]
+DownloadFailureKind = Literal[
+    "connection_interrupted",
+    "http_error",
+    "length_mismatch",
+    "local_io",
+    "unknown",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +59,8 @@ class DownloadExecutionStatus:
     current_filename: str | None = None
     destination: str | None = None
     error: str | None = None
+    failure_kind: DownloadFailureKind | None = None
+    http_status_code: int | None = None
 
 
 class DownloadExecutorPort(Protocol):

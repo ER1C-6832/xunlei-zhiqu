@@ -217,7 +217,14 @@ export interface ResourceJobSnapshot {
   title: string;
   subtitle: string;
   kind: 'zhiqu' | 'normal';
-  status: 'planning' | 'downloading' | 'waiting_for_source' | 'verifying' | 'completed' | 'paused';
+  status:
+    | 'planning'
+    | 'downloading'
+    | 'paused'
+    | 'interrupted'
+    | 'waiting_for_source'
+    | 'verifying'
+    | 'completed';
   progress: number;
   downloaded_bytes: number;
   total_bytes: number;

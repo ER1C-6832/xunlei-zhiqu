@@ -191,7 +191,13 @@ class ResourceJobSnapshot(BaseModel):
     subtitle: str
     kind: Literal["zhiqu", "normal"]
     status: Literal[
-        "planning", "downloading", "waiting_for_source", "verifying", "completed", "paused"
+        "planning",
+        "downloading",
+        "paused",
+        "interrupted",
+        "waiting_for_source",
+        "verifying",
+        "completed",
     ]
     progress: float = Field(ge=0, le=100)
     downloaded_bytes: int = Field(ge=0)

@@ -4,6 +4,7 @@ import { App } from './App';
 import './styles.css';
 import './stage-b.css';
 import './stage-b-readable.css';
+import './stage-e-b.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

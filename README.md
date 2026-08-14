@@ -8,9 +8,10 @@
 
 - **Stage A~D：已完成** — 三端骨架、任务中心、真实框选/扫描、候选融合、Node A、ResourcePlan、自动发现、媒体/图片发现、EvidenceReducer、缓存和供应商适配。
 - **Stage E0：已完成** — 架构迁移接缝、Node A 性能基线、Progressive Analysis UX（E0.1~E0.22）。
-- **Stage E / Wave A：已完成实现，待真实页面验收** — asset-aware execution plan、真实 HTTP/HTTPS 文件下载、真实进度/速度/ETA、当前进程内 pause/resume、真实 cancel、`.part -> final`。
-- **Stage E 后续：未进入** — Runtime 重启恢复、HTTP Range、持久化和更完整的执行前检查。
-- **Stage F：未进入** — Node B、Diagnosis、来源恢复与可信 source switching。
+- **Stage E / Wave A：已完成并通过真实 HTTP 下载验收** — asset-aware execution plan、真实 HTTP/HTTPS 文件下载、真实 bytes/speed/ETA、当前进程内 pause/resume、cancel、`.part -> final`。
+- **Stage E / Wave B：已完成** — `interrupted` 执行状态、最小 failure facts、真实/fixture 任务隔离、Task Center 真实状态语义、多 Asset 聚合呈现。
+- **Stage E / Wave C：下一步** — HTTP Range、Runtime 重启恢复、轻量持久化、Preflight。
+- **Stage F：未进入** — Diagnosis、Node B、来源恢复与可信 source switching。
 
 ## 当前架构
 
@@ -25,8 +26,8 @@ Browser Extension
          v       v        v
 ModelProviderAdapter   ResourceJob   DownloadExecutorPort
          |                              |
-ProviderApiAdapter                     +-- HttpDownloadExecutor   # Stage E-A real local path
-  -> DashScope/OpenAI/Generic          +-- NoopDownloadExecutor   # fixture/fallback
+ProviderApiAdapter                     +-- HttpDownloadExecutor
+  -> DashScope/OpenAI/Generic          +-- NoopDownloadExecutor
                                         `-- future XunleiDownloadExecutor
 
 Task Center
@@ -36,25 +37,19 @@ Task Center
 
 关键边界：
 
-- Extension 和 Task Center 的产品组件不拼 Runtime URL 或 `/v1/*`；HTTP 细节属于各自 transport/client。
+- Extension 和 Task Center 产品组件不拼 Runtime URL 或 `/v1/*`；HTTP 细节属于各自 transport/client。
 - `CaptureBatch != CloudAnalysisRequest`；真实 URL、页面 URL、Cookie/Authorization、临时 token、本地路径、完整 HTML 不会自动进入未来云分析。
 - Runtime 通过 `ModelProviderAdapter` 隔离模型供应商，通过 `DownloadExecutorPort` 隔离具体下载引擎。
-- 本地真实任务的执行事实来自 DownloadExecutor；JobStore 保存任务元数据和用户目标。
-- Cloud delivery 当前仍是 Demo，不会因为 Stage E-A 被错误下载到本地。
+- `ResourceJob` 保存用户目标和任务元数据；真实执行进度、速度、ETA、当前文件和失败事实来自 DownloadExecutor。
+- Cloud delivery 当前仍保持原 Demo 路径，不会被本地 HTTP executor 错误落盘。
 
-详细决策见 `docs/adr/0001-runtime-boundaries-and-model-adapters.md` 和 `docs/adr/0002-client-runtime-cloud-analysis-and-service-ports.md`。
+详细边界见 `docs/adr/0001-runtime-boundaries-and-model-adapters.md` 和 `docs/adr/0002-client-runtime-cloud-analysis-and-service-ports.md`。
 
-## Stage E-A：真实 HTTP 下载
+## Stage E：真实 HTTP 执行
 
-### 执行身份
+### Asset-aware execution
 
-不再使用：
-
-```text
-ResourceJob -> flat URL[]
-```
-
-现在是：
+Runtime 内部执行模型为：
 
 ```text
 ResourceJob
@@ -64,18 +59,15 @@ ResourceJob
         -> alternate_sources[]
 ```
 
-`ResourceJob` 是用户想完成的资源目标；`DownloadExecutionAsset` 是真正需要落盘的一个逻辑文件；Source 是这个文件的一个地址。
+一个 `ResourceJob` 是用户想完成的资源目标；一个 `DownloadExecutionAsset` 是真正需要落盘的一个逻辑文件；Source 只是这个文件的一个地址。
 
-多个 candidate 只有在已有确定性证据证明同一资源时才归为一个 Asset，目前包括：
+多个 candidate 只有在已有确定性证据证明同一资源时才归为一个 Asset，目前包括相同 `normalized_key` 或相同 canonical URL。PlanItem 同时引用多个 candidate 并不会自动让它们成为镜像。手工新建的不同 URL 也默认是不同 Asset，仅 canonical URL 完全相同时去重。
 
-- `normalized_key` 相同；
-- canonical URL 相同。
-
-PlanItem 同时引用多个 candidate 并不自动表示它们互为镜像。不同 identity 会成为不同 Asset。手工新建的不同 URL 默认也是不同 Asset，仅 canonical URL 完全相同时去重。
+一个 Job 内多个 Asset 顺序下载，不并发、不分块。任务中心仍只显示一个外层 Job，`stage_label` 可以表达当前正在下载哪个 Asset。
 
 ### HttpDownloadExecutor
 
-Stage E-A 本地 `delivery_target=local` 默认使用真实 `HttpDownloadExecutor`：
+本地 `delivery_target=local` 默认使用真实 `HttpDownloadExecutor`：
 
 ```text
 GET primary_source
@@ -89,58 +81,144 @@ GET primary_source
 -> atomic .part -> final file
 ```
 
-一个 Job 内多个 Asset 顺序下载，不并发、不分块。
+当前支持普通 HTTP/HTTPS 文件型直链，例如 ZIP/EXE/MSI/PDF/直接 MP4 等。当前不执行 Magnet/BT、HLS/DASH manifest、blob、FTP、aria2/qBittorrent/P2P。
 
-当前支持普通 HTTP/HTTPS 文件型直链，例如 ZIP/EXE/MSI/PDF/直接 MP4 等。Stage E-A 明确不执行 Magnet/BT、HLS/DASH manifest、blob、FTP、aria2/qBittorrent/P2P。无可执行 Asset 时直接返回清楚错误，不创建假下载任务。
+Cancel 会停止当前任务并删除当前 `.part`。Runtime shutdown 与 Cancel 不同：shutdown 停止连接但保留 `.part`。普通执行失败同样保留已有 `.part`，供 Wave C 的 Range 恢复使用。
 
-备用 source 会保存在对应 `asset_id` 下，但本 Wave 不自动 failover；主来源失败后任务进入 `waiting_for_source`，交给后续 Stage F。
+### Interrupted != waiting_for_source
 
-### Pause / Resume / Cancel
-
-Pause/Resume 只承诺当前 Runtime 进程仍存活：下载循环通过 cooperative `asyncio.Event` gate 停止/继续消费网络流。长时间暂停导致服务器断开时会如实失败，本 Wave不伪造 Range 续传。
-
-Cancel 顺序是：
+Wave B 冻结了最重要的状态边界：
 
 ```text
-cancel asyncio task
--> 关闭当前 HTTP response
--> 停止写盘
--> 删除当前 .part
--> 删除 ResourceJob
+执行连接/HTTP/本地写盘失败
+        ↓
+    interrupted
 ```
 
-Runtime shutdown 与用户 Cancel 不同：shutdown 会停 background task 和 HTTP connection，但保留 `.part`，供后续恢复 Wave 使用。
+而不是：
+
+```text
+执行失败
+   ↓
+waiting_for_source
+```
+
+二者语义不同：
+
+- `interrupted`：当前执行已经中断，但没有证明必须更换来源；
+- `waiting_for_source`：已经得到“任务需要重新获取来源”的诊断结论，保留给 Stage F。
+
+真实 HTTP executor 本 Wave 不主动产生 `waiting_for_source`。即使 HTTP 404/403/410，也先保存执行事实，例如 `failure_kind=http_error` 和 HTTP status，再对用户表达“下载中断 / 服务器未找到文件”等信息；是否属于来源失效由未来 Diagnosis 决定。
+
+内部最小 failure facts：
+
+```text
+connection_interrupted
+http_error (+ http_status_code)
+length_mismatch
+local_io
+unknown
+```
+
+这些是 Runtime-internal facts，不直接展示 enum 给用户。
+
+### Pause / Resume
+
+当前 Pause/Resume 仍是 Wave A 的 cooperative stream pause：
+
+```text
+downloading
+   ↓ pause
+paused
+   ↓ resume（原 HTTP stream 仍存活）
+downloading
+```
+
+如果长暂停后服务器已经关闭原 connection：
+
+```text
+paused
+   ↓ resume
+原 stream 读取失败
+   ↓
+interrupted
+```
+
+Wave B 不会从 byte 0 自动重启下载，也不会假装已经支持断点续传。`interrupted` 当前 `next_action=null`，Task Center 不显示不可工作的继续按钮。真正稳定的 Resume 留给 Wave C 的 HTTP Range。
 
 ### 状态事实来源
 
-`execution_mode=download_engine` 的真实任务永远不会进入 `_advance_demo_job()`。
-
-GET `/v1/jobs` 和 `/v1/jobs/{job_id}` 会用 Executor 的真实状态投影到现有 `ResourceJobSnapshot`：
+`execution_mode=download_engine` 的真实任务永远不会进入 `_advance_demo_job()`。GET `/v1/jobs` 和 `/v1/jobs/{job_id}` 使用 Executor 当前状态投影公开快照：
 
 ```text
 queued      -> planning
 downloading -> downloading
 paused      -> paused
+failed      -> interrupted
 completed   -> completed
-failed      -> waiting_for_source
 ```
 
-公开 schema 未重做；现有 `progress / downloaded_bytes / total_bytes / speed_bytes_per_second / eta_seconds / issue / stage_label` 已足够 Task Center 展示真实执行。
+对于已知总大小：
 
-Cloud Demo 和显式 `DOWNLOAD_EXECUTOR=noop` 的 fixture 仍可保留旧 Demo 行为。
+```text
+progress = downloaded_bytes / total_bytes
+```
 
-## Extension 产品文案
+如果多 Asset 中仍有未知 size，`total_bytes=0` 表达“总大小尚未知”，Task Center 只展示已下载字节，不伪造百分比。
 
-Stage E-A 不重做 Side Panel，只做信息减法：
+Link History 对 `downloading / paused / interrupted / waiting_for_source` 都保持 `active`；只有完成任务映射 `completed`。一次临时连接中断不会永久把链接标成 failed。
 
-- 扫描结果改为“发现 N 项可下载内容”；
-- 首屏分类只保留文件、视频/音频、图片、磁力链接等用户有意义的类别；
-- “候选资源 / 来自当前可见页面 / 使用这批资源”等工程表达已移除；
-- 页面推荐标注不再显示绿色解释卡，只保留“定位到网页”；
-- 推荐 tag 使用“适合当前电脑 / 兼容性更好 / 优先清晰度 / 体积更小”，不展示 raw reason 或 `os=windows` 一类技术事实；
-- 创建任务后只短暂提示“已创建下载任务”，主按钮变为“打开任务中心”。
+## 真实任务与 Fixture 隔离
 
-Task Center 保持原布局，通过现有轮询显示真实 bytes/speed/ETA，并在本地未完成任务详情提供真实“取消任务”。
+默认运行不再自动注入 Stage B 示例任务：
+
+```dotenv
+DOWNLOAD_EXECUTOR=http
+TASK_FIXTURES_ENABLED=false
+```
+
+此时 Runtime 新启动后 `/v1/jobs` 默认为空，只有用户真实创建任务后才出现任务。`DOWNLOAD_EXECUTOR=noop` 与 UI fixture 是两件独立的事，不会互相隐式开启。
+
+只有显式 UI 开发时才启用：
+
+Runtime：
+
+```dotenv
+TASK_FIXTURES_ENABLED=true
+```
+
+Task Center `apps/task-center/.env.local`：
+
+```dotenv
+VITE_TASK_CENTER_FIXTURES=true
+```
+
+真实使用保持：
+
+```dotenv
+VITE_TASK_CENTER_FIXTURES=false
+```
+
+Task Center 在本地服务未连接时不再用 Example App 等 fixture 冒充真实任务；首次连接失败会显示“本地服务未连接”，已经获取过真实 snapshot 后发生断连则保留最后一次真实状态。
+
+## Task Center 状态语义
+
+用户侧状态现在明确区分：
+
+```text
+planning            准备下载
+downloading         正在下载
+paused              已暂停
+interrupted         下载中断
+waiting_for_source  需要续取
+completed           已完成
+```
+
+顶部总速度只统计 `status=downloading` 的任务；paused/interrupted/waiting/completed 均不计入。Issue 筛选和通知同时覆盖 `interrupted` 与 `waiting_for_source`，主动暂停不算异常。
+
+完成任务的当前主要动作是“复制保存位置”，因为浏览器 Demo 尚未真正打开 Windows Explorer；不会用“打开文件夹”文案伪装成已实现能力。
+
+任务详情只展示文件/任务名称、保存位置、真实进度、速度、剩余时间、当前正在下载的资源和来源页面，不展示 asset id、candidate id、failure enum、source credential 或执行引擎内部状态。
 
 ## Node A 稳定配置
 
@@ -183,19 +261,27 @@ PLAN_CACHE_TTL_SECONDS=1200
 PLAN_CACHE_MAX_ENTRIES=64
 
 DOWNLOAD_EXECUTOR=http
-# 留空默认 ~/Downloads/迅雷智取；真实大文件测试建议显式设置。
 DOWNLOAD_DIRECTORY=
+TASK_FIXTURES_ENABLED=false
 
 RUNTIME_AUTH_MODE=off
 ```
 
-Extension 开发 fixture (`apps/extension/.env.local`)：
+Extension 开发配置 `apps/extension/.env.local`：
 
 ```dotenv
 VITE_RUNTIME_URL=http://127.0.0.1:8765
 VITE_ZHIQU_CAPABILITY_MODE=demo_local
 VITE_ZHIQU_ANALYSIS_CREDENTIAL=demo
 VITE_RUNTIME_SESSION=
+```
+
+Task Center 真实模式 `apps/task-center/.env.local`：
+
+```dotenv
+VITE_RUNTIME_URL=http://127.0.0.1:8765
+VITE_RUNTIME_SESSION=
+VITE_TASK_CENTER_FIXTURES=false
 ```
 
 ## 启动
@@ -206,7 +292,7 @@ Runtime：
 uv run --project services/runtime uvicorn xunlei_zhiqu_runtime.main:app --app-dir services/runtime/src --reload --host 127.0.0.1 --port 8765
 ```
 
-Task Center 开发模式：
+Task Center：
 
 ```powershell
 corepack pnpm --filter @xunlei-zhiqu/task-center dev
@@ -218,7 +304,7 @@ Extension 构建并旁加载 `apps/extension/dist`：
 corepack pnpm --filter @xunlei-zhiqu/extension build
 ```
 
-## Stage E-A 自动检查
+## Stage E-B 自动检查
 
 ```powershell
 corepack pnpm typecheck
@@ -237,39 +323,80 @@ uv run --project services/runtime pytest `
 
 `Select-String` 必须无输出。
 
-Stage E 测试重点保护：ExecutionAsset 分组、未确认资源不执行、Manual URL identity、非 HTTP/manifest 拒绝、真实 `.part` 写入、pause/resume、cancel 删除 `.part`、以及 real Job 不进入 Demo progress。
+Stage E-B 测试重点保护：ExecutionAsset identity、真实任务不走 Demo progress、connection failure → `interrupted`、pause → speed 0 / resume action、`waiting_for_source` 仍是合法未来状态、fixture 显式开关、HTTP 404 failure facts、连接中断保留 `.part`、cancel 删除 `.part`、以及多 Asset 聚合 bytes/current asset label。
 
-## Stage E-A 真实验收
+## Stage E-B 人工验收
 
-建议先把下载目录设到容易观察的位置：
+### 1. 干净启动
 
-```dotenv
-DOWNLOAD_EXECUTOR=http
-DOWNLOAD_DIRECTORY=C:\Users\<you>\Downloads\迅雷智取
-```
+新启动 Runtime 和 Task Center，默认不应出现 Example App / sample-dataset 等示例任务。
 
-重启 Runtime 后，走真实 Python/JDK 页面：
+### 2. 真实 JDK 下载
 
 ```text
 扫描 / 框选
 -> 智能分析
--> 确认推荐文件
--> 保存到“本地”
--> 开始下载
+-> 确认 Windows x64 文件
+-> 保存到本地
 -> 打开任务中心
 ```
 
-应看到真实磁盘变化：
+任务中心只应看到真实创建的任务，总速度来自真实 `downloading` Job。
+
+### 3. 短暂停
+
+暂停后：
 
 ```text
-<filename>.part        # 下载中持续增长
-<filename>             # 正常完成后原子替换
+状态 = 已暂停
+speed = 0
+.part 不再增长
 ```
 
-Task Center 应显示来自 Runtime Executor 的真实 `downloaded bytes / total / speed / ETA / progress`。暂停后 `.part` 停止增长且 speed=0；同一 Runtime 进程中恢复后继续增长；取消一个新任务后网络停止、`.part` 删除、任务移除；完成后 `.part` 消失且任务显示 100%。
+很快继续，如果原 HTTP stream 仍存活，应继续下载。
 
-可用一个故意返回 404 的 HTTP URL确认任务进入 `waiting_for_source`，但本 Wave不要继续做换源或 Node B。
+### 4. 连接中断
 
-## 明确留给后续 Wave / Stage F
+如果服务器在暂停期间关闭 connection，随后继续读取失败：
 
-本 Wave没有实现：SQLite/JobStore 持久化、Runtime 重启恢复、HTTP Range 断点续传、完整 Preflight、磁盘空间检查体系、完整 hash 校验、自动 source failover、Node B/Diagnosis/一键续取、Magnet/BT、HLS/DASH 编排、aria2/qBittorrent/P2P、多连接分块、WebSocket/下载事件总线。
+```text
+状态 = 下载中断
+issue = 下载连接已中断（或具体 HTTP/长度错误）
+next_action = null
+.part 保留
+```
+
+不得自动变成“需要续取”。
+
+### 5. HTTP 404
+
+手工创建一个返回 404 的 URL，应显示：
+
+```text
+下载中断
+服务器未找到文件
+```
+
+本 Wave 不自动调用 Node B 或切换来源。
+
+### 6. Cancel
+
+取消未完成/中断任务后，任务消失，当前 `.part` 删除。
+
+## 下一步：Stage E / Wave C
+
+Wave C 才实现下载器意义上的稳定续传：
+
+```text
+.part offset
++
+HTTP Range: bytes=<offset>-
++
+轻量任务持久化
++
+Runtime 重启恢复
++
+Preflight
+```
+
+Wave B 明确没有实现：HTTP Range、断点续传、Runtime 重启恢复、SQLite、完整 Preflight、磁盘空间体系、自动 source failover、Diagnosis Controller、Node B、ReacquisitionRequest、一键续取、Hash/chunk identity、WebSocket、多线程分块、BT/Magnet、HLS/DASH executor。

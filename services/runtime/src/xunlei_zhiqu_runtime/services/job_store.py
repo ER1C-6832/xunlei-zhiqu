@@ -13,67 +13,35 @@ from xunlei_zhiqu_runtime.services.download_executor import DownloadExecutionSta
 from xunlei_zhiqu_runtime.services.jobs import fixture_jobs
 
 
-_jobs: list[ResourceJobSnapshot] = fixture_jobs()
+_jobs: list[ResourceJobSnapshot] = []
 _created_job_ids: set[str] = set()
 _job_contexts: dict[str, ResourceJobCreateRequest] = {}
-_history: list[LinkHistoryItem] = [
-    LinkHistoryItem(
-        history_id="history_fixture_001",
-        title="Example App 5.2.1",
-        link_type="http",
-        display_link="https://downloads.example.test/ExampleApp_5.2.1_win_x64_portable.zip",
-        size_bytes=2_692_000_000,
-        added_at=_jobs[0].created_at,
-        job_id="job_zhiqu_001",
-        delivery_target="local",
-        status="active",
-        source_page="https://example.test/downloads",
-        resource_type="software",
-        favorite=True,
-        favorite_at=_jobs[0].created_at + timedelta(minutes=2),
-    ),
-    LinkHistoryItem(
-        history_id="history_fixture_002",
-        title="Open Media Course · 1080p",
-        link_type="magnet",
-        display_link="magnet:?xt=urn:btih:OPENMEDIACOURSEDEMO",
-        size_bytes=7_643_000_000,
-        added_at=_jobs[1].created_at,
-        job_id="job_zhiqu_002",
-        delivery_target="cloud",
-        status="failed",
-        source_page="https://media.example.test/course",
-        resource_type="video",
-    ),
-    LinkHistoryItem(
-        history_id="history_fixture_003",
-        title="sample-dataset.zip",
-        link_type="http",
-        display_link="https://data.example.test/sample-dataset.zip",
-        size_bytes=482_000_000,
-        added_at=_jobs[2].created_at,
-        job_id="job_normal_001",
-        delivery_target="local",
-        status="completed",
-        source_page="https://data.example.test/datasets",
-        resource_type="archive",
-    ),
-    LinkHistoryItem(
-        history_id="history_fixture_004",
-        title="Open Tools Pack 2026.08",
-        link_type="http",
-        display_link="https://downloads.example.test/OpenToolsPack_2026.08_x64.exe",
-        size_bytes=734_000_000,
-        added_at=_jobs[3].created_at,
-        job_id="job_zhiqu_003",
-        delivery_target="cloud",
-        status="completed",
-        source_page="https://tools.example.test/releases",
-        resource_type="software",
-        favorite=True,
-        favorite_at=_jobs[3].created_at + timedelta(minutes=4),
-    ),
-]
+_history: list[LinkHistoryItem] = []
+_store_initialized = False
+
+
+def initialize_job_store(fixtures_enabled: bool = False) -> None:
+    """Initialize the in-memory store once; fixtures are always explicit."""
+    global _store_initialized
+    if _store_initialized:
+        return
+    _store_initialized = True
+    if not fixtures_enabled:
+        return
+
+    jobs = fixture_jobs()
+    _jobs.extend(jobs)
+    _history.extend(_fixture_history(jobs))
+
+
+def _reset_job_store_for_tests(*, fixtures_enabled: bool = False) -> None:
+    global _store_initialized
+    _jobs.clear()
+    _created_job_ids.clear()
+    _job_contexts.clear()
+    _history.clear()
+    _store_initialized = False
+    initialize_job_store(fixtures_enabled)
 
 
 def create_job(
@@ -187,7 +155,7 @@ def create_manual_job(
         status="planning",
         progress=0,
         downloaded_bytes=0,
-        total_bytes=total_bytes_override or 0,
+        total_bytes=total_bytes_override if total_bytes_override is not None else 0,
         speed_bytes_per_second=0,
         eta_seconds=None,
         stage_label="准备下载" if real_local else "普通任务已创建，等待执行",
@@ -331,7 +299,7 @@ def project_execution_status(
         "downloading": "downloading",
         "paused": "paused",
         "completed": "completed",
-        "failed": "waiting_for_source",
+        "failed": "interrupted",
         "cancelled": job.status,
     }[status.state]
     stage_label = _execution_stage_label(status)
@@ -341,7 +309,7 @@ def project_execution_status(
         "downloading": "pause",
         "paused": "resume",
         "completed": "open",
-        "failed": "continue_acquisition",
+        "failed": None,
         "cancelled": None,
     }[status.state]
 
@@ -530,8 +498,6 @@ def _refresh_history_statuses() -> None:
 def _history_status(status: str) -> str:
     if status == "completed":
         return "completed"
-    if status == "waiting_for_source":
-        return "failed"
     return "active"
 
 
@@ -594,7 +560,12 @@ def _find_index(job_id: str) -> int | None:
 def _advance_demo_job(job: ResourceJobSnapshot) -> ResourceJobSnapshot:
     if job.execution_mode != "demo":
         return job
-    if job.job_id not in _created_job_ids or job.status in {"paused", "waiting_for_source", "completed"}:
+    if job.job_id not in _created_job_ids or job.status in {
+        "paused",
+        "interrupted",
+        "waiting_for_source",
+        "completed",
+    }:
         return job
 
     cloud = job.delivery_target == "cloud"
@@ -656,3 +627,66 @@ def _eta(total_bytes: int, downloaded_bytes: int, speed: int) -> int | None:
     if total_bytes <= downloaded_bytes or speed <= 0:
         return None
     return max(1, (total_bytes - downloaded_bytes) // speed)
+
+
+def _fixture_history(jobs: list[ResourceJobSnapshot]) -> list[LinkHistoryItem]:
+    if len(jobs) < 4:
+        return []
+    return [
+        LinkHistoryItem(
+            history_id="history_fixture_001",
+            title="Example App 5.2.1",
+            link_type="http",
+            display_link="https://downloads.example.test/ExampleApp_5.2.1_win_x64_portable.zip",
+            size_bytes=2_692_000_000,
+            added_at=jobs[0].created_at,
+            job_id="job_zhiqu_001",
+            delivery_target="local",
+            status="active",
+            source_page="https://example.test/downloads",
+            resource_type="software",
+            favorite=True,
+            favorite_at=jobs[0].created_at + timedelta(minutes=2),
+        ),
+        LinkHistoryItem(
+            history_id="history_fixture_002",
+            title="Open Media Course · 1080p",
+            link_type="magnet",
+            display_link="magnet:?xt=urn:btih:OPENMEDIACOURSEDEMO",
+            size_bytes=7_643_000_000,
+            added_at=jobs[1].created_at,
+            job_id="job_zhiqu_002",
+            delivery_target="cloud",
+            status="failed",
+            source_page="https://media.example.test/course",
+            resource_type="video",
+        ),
+        LinkHistoryItem(
+            history_id="history_fixture_003",
+            title="sample-dataset.zip",
+            link_type="http",
+            display_link="https://data.example.test/sample-dataset.zip",
+            size_bytes=482_000_000,
+            added_at=jobs[2].created_at,
+            job_id="job_normal_001",
+            delivery_target="local",
+            status="completed",
+            source_page="https://data.example.test/datasets",
+            resource_type="archive",
+        ),
+        LinkHistoryItem(
+            history_id="history_fixture_004",
+            title="Open Tools Pack 2026.08",
+            link_type="http",
+            display_link="https://downloads.example.test/OpenToolsPack_2026.08_x64.exe",
+            size_bytes=734_000_000,
+            added_at=jobs[3].created_at,
+            job_id="job_zhiqu_003",
+            delivery_target="cloud",
+            status="completed",
+            source_page="https://tools.example.test/releases",
+            resource_type="software",
+            favorite=True,
+            favorite_at=jobs[3].created_at + timedelta(minutes=4),
+        ),
+    ]

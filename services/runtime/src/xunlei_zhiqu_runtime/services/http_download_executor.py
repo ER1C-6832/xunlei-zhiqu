@@ -15,6 +15,7 @@ from xunlei_zhiqu_runtime.services.download_executor import (
     DownloadExecutionAsset,
     DownloadExecutionRequest,
     DownloadExecutionStatus,
+    DownloadFailureKind,
     replace_execution_asset,
 )
 
@@ -73,7 +74,7 @@ class HttpDownloadExecutor:
         unsupported = [asset.label for asset in assets if not _is_supported_http_asset(asset)]
         if unsupported:
             labels = "、".join(unsupported[:3])
-            raise ValueError(f"当前演示版下载器暂不支持这种资源类型：{labels}")
+            raise ValueError(f"当前下载器暂不支持这种资源类型：{labels}")
 
     async def create(self, request: DownloadExecutionRequest) -> None:
         self.validate_assets(request.assets)
@@ -116,9 +117,16 @@ class HttpDownloadExecutor:
     async def resume(self, job_id: str) -> None:
         execution = self._require(job_id)
         if execution.status.state != "paused":
+            if execution.status.state == "failed":
+                raise ValueError("下载已中断，当前不能继续")
             raise ValueError(f"任务当前状态 {execution.status.state} 不支持恢复")
         execution.pause_gate.set()
-        execution.status = replace(execution.status, state="downloading")
+        execution.status = replace(
+            execution.status,
+            state="downloading",
+            speed_bytes_per_second=0,
+            eta_seconds=None,
+        )
 
     async def cancel(self, job_id: str) -> None:
         execution = self._executions.get(job_id)
@@ -138,6 +146,8 @@ class HttpDownloadExecutor:
             speed_bytes_per_second=0,
             eta_seconds=None,
             error=None,
+            failure_kind=None,
+            http_status_code=None,
         )
 
     async def status(self, job_id: str) -> DownloadExecutionStatus | None:
@@ -184,6 +194,8 @@ class HttpDownloadExecutor:
                     speed_bytes_per_second=0,
                     eta_seconds=None,
                     error=None,
+                    failure_kind=None,
+                    http_status_code=None,
                 )
                 asset_bytes = await self._download_asset(
                     execution,
@@ -212,6 +224,8 @@ class HttpDownloadExecutor:
                 current_asset_label=None,
                 current_filename=None,
                 error=None,
+                failure_kind=None,
+                http_status_code=None,
             )
         except asyncio.CancelledError:
             if execution.cancel_requested:
@@ -219,12 +233,15 @@ class HttpDownloadExecutor:
                 execution.current_part = None
             raise
         except Exception as exc:
+            failure_kind, http_status_code, message = _failure_fact(exc)
             execution.status = replace(
                 execution.status,
                 state="failed",
                 speed_bytes_per_second=0,
                 eta_seconds=None,
-                error=_user_error(exc),
+                error=message,
+                failure_kind=failure_kind,
+                http_status_code=http_status_code,
             )
 
     async def _download_asset(
@@ -297,7 +314,7 @@ class HttpDownloadExecutor:
     def _require(self, job_id: str) -> _Execution:
         execution = self._executions.get(job_id)
         if execution is None:
-            raise ValueError("下载任务不存在或已不在当前 Runtime 进程中")
+            raise ValueError("下载任务不存在或已不在当前本地服务中")
         return execution
 
 
@@ -329,16 +346,16 @@ def _is_supported_http_asset(asset: DownloadExecutionAsset) -> bool:
 def _ensure_supported_source(source: str) -> None:
     parts = urlsplit(source)
     if parts.scheme.lower() not in {"http", "https"}:
-        raise ValueError("当前演示版下载器暂不支持这种资源类型")
+        raise ValueError("当前下载器暂不支持这种资源类型")
     suffix = Path(unquote(parts.path)).suffix.lower()
     if suffix in _MANIFEST_SUFFIXES:
-        raise ValueError("当前演示版下载器暂不支持流媒体清单下载")
+        raise ValueError("当前下载器暂不支持流媒体清单下载")
 
 
 def _ensure_supported_response(response: httpx.Response) -> None:
     content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type in _MANIFEST_CONTENT_TYPES:
-        raise ValueError("当前演示版下载器暂不支持流媒体清单下载")
+        raise ValueError("当前下载器暂不支持流媒体清单下载")
     if content_type in _NON_FILE_CONTENT_TYPES:
         raise ValueError("当前地址返回的是网页，不是可直接下载的文件")
 
@@ -439,13 +456,23 @@ def _delete_partial(path: Path | None) -> None:
         path.unlink()
 
 
-def _user_error(exc: Exception) -> str:
+def _failure_fact(exc: Exception) -> tuple[DownloadFailureKind, int | None, str]:
     if isinstance(exc, _HttpStatusFailure):
-        return f"服务器返回 {exc.status_code}"
+        if exc.status_code == 404:
+            message = "服务器未找到文件"
+        elif exc.status_code == 403:
+            message = "服务器拒绝访问"
+        elif exc.status_code == 410:
+            message = "服务器上的文件已不可用"
+        else:
+            message = f"服务器返回 {exc.status_code}"
+        return "http_error", exc.status_code, message
     if isinstance(exc, _NetworkFailure):
-        return "当前来源无法访问"
+        return "connection_interrupted", None, "下载连接已中断"
     if isinstance(exc, _LengthMismatch):
-        return "下载中断，文件大小与服务器声明不一致"
+        return "length_mismatch", None, "下载中断，文件大小与服务器声明不一致"
+    if isinstance(exc, OSError):
+        return "local_io", None, "保存文件时发生错误"
     if isinstance(exc, ValueError):
-        return str(exc)
-    return "下载中断"
+        return "unknown", None, str(exc)
+    return "unknown", None, "下载中断"
