@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.download_executor = download_executor
     app.state.download_executor_mode = settings.download_executor
     app.state.recovery_service = recovery_service
+    app.state.transient_retry_jobs = set()
     app.state.plan_cache = ResourcePlanCache(ttl_seconds=settings.plan_cache_ttl_seconds, max_entries=settings.plan_cache_max_entries)
     app.state.analyzer = CaptureAnalyzer(provider, cache=app.state.plan_cache)
 
@@ -285,6 +286,23 @@ async def _refresh_execution_job(request: Request, job: ResourceJobSnapshot) -> 
     if service is None or status.state != "failed": return projected
     execution_request = await executor.execution_request(job.job_id); asset = _active_execution_asset(execution_request, status.current_asset_id); decision = service.diagnosis_for(job.job_id, status, asset)
     logger.info("download_diagnosis job_id=%s failure_kind=%s http_status=%s action=%s reason=%s", job.job_id, status.failure_kind, status.http_status_code, decision.action, decision.reason)
+
+    # While the same Runtime is alive, one connection-level/5xx failure gets one
+    # lightweight same-source retry before we ask the browser to reacquire. Runtime
+    # restart remains passive because `runtime_interrupted` is intentionally excluded.
+    live_transient = status.failure_kind == "connection_interrupted" or (status.failure_kind == "http_error" and status.http_status_code in {500, 502, 503, 504})
+    retried_jobs: set[str] = request.app.state.transient_retry_jobs
+    if live_transient and job.job_id not in retried_jobs:
+        retried_jobs.add(job.job_id)
+        service.note_same_source_retry(job.job_id, status)
+        logger.info("download_same_source_retry job_id=%s failure_kind=%s http_status=%s", job.job_id, status.failure_kind, status.http_status_code)
+        try:
+            await executor.retry_same_source(job.job_id)
+        except ValueError:
+            logger.warning("download_same_source_retry_rejected job_id=%s", job.job_id)
+        refreshed = await executor.status(job.job_id)
+        return project_execution_status(job.job_id, refreshed) or projected if refreshed is not None else projected
+
     if decision.action == "reacquire_source": return service.mark_waiting_for_source(job.job_id, decision) or projected
     return projected
 
