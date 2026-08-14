@@ -14,8 +14,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "pytest>=8.4,<9",
-  "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1"
 ]
 
@@ -25,11 +23,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/xunlei_zhiqu_runtime"]
-
-[tool.pytest.ini_options]
-addopts = "-q"
-testpaths = ["tests"]
-asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
