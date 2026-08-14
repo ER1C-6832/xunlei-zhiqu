@@ -25,3 +25,6 @@ Thumbs.db
 # Runtime data
 services/runtime/data/
 *.sqlite3
+*.db
+*.db-wal
+*.db-shm
