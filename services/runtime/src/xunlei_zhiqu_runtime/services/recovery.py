@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
@@ -21,6 +22,8 @@ from xunlei_zhiqu_runtime.services.recovery_http_executor import RecoverableHttp
 
 logger = logging.getLogger("uvicorn.error")
 RecoveryPhase = Literal["opening_source_page", "matching_candidates", "verifying_candidate", "manual_selection", "switching_source", "completed", "failed"]
+_URL_TEXT = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
+_SECRET_PAIR = re.compile(r"\b(token|signature|sig|auth|authorization|api[_-]?key|expires?)=([^\s&]+)", re.IGNORECASE)
 
 
 class RecoveryCandidateView(BaseModel):
@@ -101,6 +104,7 @@ class RecoveryService:
         self.diagnosis = diagnosis or DiagnosisService()
         self._contexts: dict[str, dict[str, Any]] = {}
         self._retry_counts: dict[str, int] = {}
+        self._retry_offsets: dict[str, int] = {}
         self._load_persisted_recovery_state()
 
     def diagnosis_for(
@@ -158,14 +162,21 @@ class RecoveryService:
         is_5xx = status.failure_kind == "http_error" and status.http_status_code in {500, 502, 503, 504}
         if not (is_connection or is_5xx):
             return
-        count = self._retry_counts.get(job_id, 0) + 1
-        self._retry_counts[job_id] = count
-        self.state_store.patch_job(job_id, {"same_source_retry_count": count})
+        self._retry_counts[job_id] = self._retry_counts.get(job_id, 0) + 1
+        self._retry_offsets[job_id] = status.downloaded_bytes
+
+    def observe_execution_status(self, job_id: str, status: DownloadExecutionStatus) -> None:
+        """Reset a transient retry incident only after bytes actually advance."""
+        retry_offset = self._retry_offsets.get(job_id)
+        if retry_offset is None:
+            return
+        if status.state in {"downloading", "completed"} and status.downloaded_bytes > retry_offset:
+            self.reset_same_source_retry(job_id)
 
     def reset_same_source_retry(self, job_id: str) -> None:
-        if self._retry_counts.get(job_id, 0) == 0:
-            return
-        self._retry_counts[job_id] = 0
+        self._retry_counts.pop(job_id, None)
+        self._retry_offsets.pop(job_id, None)
+        # Clean up the Stage-F persisted field if an older runtime wrote it.
         self.state_store.patch_job(job_id, {"same_source_retry_count": 0})
 
     async def continue_acquisition(
@@ -595,13 +606,9 @@ class RecoveryService:
             snapshot = record.get("snapshot")
             if not isinstance(snapshot, dict) or not isinstance(snapshot.get("job_id"), str):
                 continue
-            job_id = snapshot["job_id"]
             context = record.get("recovery_context")
             if isinstance(context, dict) and isinstance(context.get("recovery_id"), str):
                 self._contexts[context["recovery_id"]] = context
-            count = record.get("same_source_retry_count")
-            if isinstance(count, int) and count >= 0:
-                self._retry_counts[job_id] = count
 
     def _require_context(self, recovery_id: str) -> dict[str, Any]:
         context = self._contexts.get(recovery_id)
@@ -660,12 +667,12 @@ def _capture_candidates(capture: CaptureBatch) -> list[dict[str, Any]]:
             {
                 "candidate_id": candidate.candidate_id,
                 "source": value,
-                "label": _short(label, 120),
-                "filename": _short(filename, 120) if filename else None,
+                "label": _safe_model_text(label, 120),
+                "filename": _safe_model_text(filename, 120) if filename else None,
                 "content_type": probe.content_type if probe else None,
                 "size": probe.content_length if probe else None,
-                "nearby": _short(candidate.nearby_text, 140),
-                "section": _short(candidate.section_heading, 100),
+                "nearby": _safe_model_text(candidate.nearby_text, 140),
+                "section": _safe_model_text(candidate.section_heading, 100),
             }
         )
     return result[:24]
@@ -707,10 +714,10 @@ async def _match_with_node_b(
 ) -> _NodeBResult:
     request_document = {
         "target": {
-            "title": context.get("resource_title"),
+            "title": _safe_model_text(context.get("resource_title"), 160),
             "type": context.get("resource_type"),
-            "variant": context.get("variant_summary"),
-            "attributes": context.get("target_attributes") or {},
+            "variant": _safe_model_text(context.get("variant_summary"), 200),
+            "attributes": _safe_model_attributes(context.get("target_attributes") or {}),
             "expected_size": context.get("expected_total") or None,
         },
         "original": {
@@ -815,6 +822,24 @@ def _safe_target_attributes(value: dict[str, Any]) -> dict[str, Any]:
         ):
             result[str(key)] = item
     return result
+
+
+def _safe_model_attributes(value: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, str):
+            result[key] = _safe_model_text(item, 120)
+        elif isinstance(item, (int, float, bool)) or item is None:
+            result[key] = item
+    return result
+
+
+def _safe_model_text(value: object, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    redacted = _URL_TEXT.sub("[link]", value)
+    redacted = _SECRET_PAIR.sub(lambda match: f"{match.group(1)}=[redacted]", redacted)
+    return _short(redacted, limit)
 
 
 def _short(value: object, limit: int) -> str | None:
