@@ -3,247 +3,172 @@
 > **产品名**：迅雷智取  
 > **技术定义**：单编排器、双智能节点、确定性执行的闭环资源交付 Agent  
 > **当前代码事实来源**：GitHub `main`  
-> **当前阶段**：Stage F — Diagnosis、重新智取、Node B 与一键续取闭环
+> **当前阶段**：Stage G — 真实环境泛化、真实试用与产品收口
 
-这份 v0.4 只保留当前开发仍然有效的产品与架构约束。历史方案与早期测试/协作流程可从 Git 历史查看；当历史内容与当前 `main` 或本文件冲突时，以当前 `main` 和最新开发纪律为准。
+这份蓝图只保留当前仍有效的产品与工程约束。Stage A~F 的历史实现与验收事实保留在 Git 历史和对应 acceptance 文档中；当前开发不再扩张核心能力。
 
 ---
 
-## 1. 产品定义
+## 1. 产品边界
 
-迅雷智取不是通用聊天助手、通用爬虫或纯链接下载器。
-
-产品由三部分组成：
+迅雷智取由三部分组成：
 
 1. Chrome / Edge Manifest V3 浏览器扩展；
 2. Python FastAPI 本地 Runtime；
-3. React 实现的迅雷 17 风格下载任务中心。
+3. React 下载任务中心。
 
-核心结构固定为：
+固定技术结构：
 
 ```text
 单编排器
 +
 节点 A：第一次理解页面资源并帮助用户选对
 +
-节点 B：原来源失效后，在新环境中重新找到原资源
+节点 B：原来源失效后，在用户当前页面中找回原资源
 +
-确定性 Runtime：真正执行、诊断、验证与切换来源
+确定性 Runtime：执行、诊断、来源验证与 Source Switch
 ```
 
-模型不直接写文件、不决定 Range append、不删除用户数据，也不把“看起来像同一资源”当作可以拼接旧字节的证明。
+不做通用聊天助手、通用爬虫、自动搜索引擎或纯链接下载器。
 
 ---
 
-## 2. 当前完整产品链路
+## 2. 已完成阶段
 
-首次获取：
+```text
+Stage A~D：完成
+Stage E0：完成
+Stage E：完成并真人验收
+Stage F：完成并通过受控真人端到端闭环验收
+Stage G：进行中
+```
+
+Stage E 已证明同来源真实 HTTP Range、SQLite 持久化、Runtime restart 后原任务原 `.part` 继续。
+
+Stage F 已证明：Source A 永久失败后，Diagnosis → 一键续取 → Browser Reacquisition → 真实 Node B → B sample_match / C mismatch → Source Switch → 原 `.part` 从旧 offset 继续 → 最终内容正确。详细记录见 `docs/blueprint/F-acceptance.md`。
+
+受控场景通过只证明 Recovery Architecture，不等于真实互联网泛化完成。
+
+---
+
+## 3. Stage G 唯一目标
+
+把已经完成的完整产品从“架构闭环成立”推进到：
+
+> **真实互联网环境里可以正常使用的完整可试用原型。**
+
+Stage G 不再增加新的 Agent 模块。完成后不进入 Stage H，只允许真实使用后的 Bugfix、文案/体验打磨、录屏和比赛材料。
+
+---
+
+## 4. 当前完整产品链路
 
 ```text
 真实页面
-→ 多通道 Capture
+→ Extension Capture
 → Node A
 → ResourcePlan
 → 用户确认
 → ResourceJob
-→ ExecutionAsset[]
-→ HttpDownloadExecutor
-→ .part
-→ final
-```
-
-失败恢复：
-
-```text
-真实下载
-→ 来源失效
-→ DiagnosisService
-→ waiting_for_source
-→ 一键续取
-→ Browser Reacquisition
-→ 复用 Capture
+→ 真实 HTTP/HTTPS 下载
+→ .part / Range Resume / SQLite
+→ 现实失败
+→ Runtime Diagnosis
+→ 一次同来源轻量重试
+→ 必要时一键续取 / 寻找其他来源
+→ 用户进入任意相关真实页面
+→ Extension Recovery Mode
+→ 当前 active tab Capture
 → Node B
-→ Source Verification
-→ Source A → Source B
+→ Runtime Source Verification
+→ Source Switch
 → 原 ResourceJob / 原 .part / 原 offset 继续
 → 完成
 ```
 
-任何恢复都必须保持原任务身份。验证通过后不创建第二个 ResourceJob。
+恢复永远保持原任务身份，不创建第二个 ResourceJob。
 
 ---
 
-## 3. Stage E 状态
+## 5. Recovery Mode 的真实网站边界
 
-Stage E 已完成功能与真人真实链路验收。
+原资源页只是恢复后的默认落点，不是范围边界。
 
-```text
-Stage E / Wave A：完成
-Stage E / Wave B：完成
-Stage E / Wave C：完成并真人验收
-Stage E：完成
-```
+只要 pending RecoveryContext 存在，用户可以去：
 
-真人已确认：
+- 原网站其他下载页；
+- 官方镜像页；
+- 其他 CDN；
+- 另一个域名；
+- 另一个真实资源站。
 
-```text
-JDK 下载中
-→ Runtime kill
-→ Runtime restart
-→ 原 ResourceJob 恢复
-→ 原 .part 保留
-→ HTTP Range 从磁盘实际 offset 继续
-→ 最终完成
-```
-
-因此普通网络抖动、用户 Pause、Runtime restart、同来源 Range Resume 都属于 Stage E，不属于 Node B。
-
-必须始终维持：
+Extension 继续显示：
 
 ```text
-interrupted != waiting_for_source
+继续下载
+资源名称 / 已确认规格
+已保留 xx%
+在当前页面寻找可用下载地址
 ```
+
+只允许操作当前 active tab。首次打开恢复页可以自动扫描一次；之后导航或切换页面只提示用户显式“在当前页面寻找”。禁止遍历所有 tabs、后台爬网页、自动打开 Google/Bing 或自行全网搜索。
 
 ---
 
-## 4. 当前开发纪律
+## 6. Node A / Node B 模型边界
 
-### 4.1 真实反馈优先
+Node A 在 Stage G 冻结。除非真实网站持续暴露某一类通用资源无法理解，否则不做新 profile、benchmark、换模型或 token 微优化。
 
-当前 Demo 阶段不使用 pytest，不追求自动化测试体系，也不把旧 assertion 当作业务事实。
-
-Python 基础检查：
-
-```bash
-uv run --project services/runtime python -m compileall services/runtime/src
-```
-
-前端基础检查：
-
-```bash
-corepack pnpm typecheck
-corepack pnpm --filter @xunlei-zhiqu/extension build
-corepack pnpm --filter @xunlei-zhiqu/task-center build
-```
-
-关键能力以以下事实验收：
+Node B 只做语义身份匹配：
 
 ```text
-真实页面
-真实浏览器交互
-真实 Runtime
-真实下载
-真实 .part
-真实 HTTP Range
-受控真实故障
-真实日志
+Original Resource Identity
++
+Current Page Candidates
+→ Node B
 ```
 
-可以保留 `demo/fault-scenarios/`、`scripts/manual-*.py` 这类真人 Demo / smoke 工具，但不重新包装成测试框架。
+Node A 与 Node B 都通过正式 `ModelProviderAdapter` 使用模型。Node B 使用公开的结构化语义能力，不读取 Provider `_inner`、`_client`、`_api_adapter`、`_model` 私有字段。
 
-### 4.2 直接 main 快速迭代
+```text
+ModelProviderAdapter
+→ StructuredChatProvider
+→ ProviderApiAdapter
+→ supplier/model dialect
+```
 
-当前阶段直接在 `main` 开发，正常小 commit，不建立长期 Wave/agent 分支，不创建 Draft PR，不重写 main 历史。
-
-### 4.3 少抽象
-
-除非真实链路需要，否则不新增复杂 Incident 层、ResourceGraph、Event Sourcing、消息总线、WebSocket、Redis/Kafka 或新的数据库框架。
+不建立第二套 Gateway 或 Provider。
 
 ---
 
-## 5. 技术栈
+## 7. Runtime 状态推进
 
-Runtime：
+`GET /v1/jobs` 与 `GET /v1/jobs/{job_id}` 是纯读，不承担 Diagnosis、retry 或状态迁移。
 
-- Python 3.12+
-- FastAPI
-- Uvicorn
-- Pydantic / pydantic-settings
-- HTTPX
-- stdlib SQLite
-
-前端：
-
-- React
-- TypeScript
-- Vite / pnpm workspace
-- Chrome / Edge Manifest V3 Extension
-
-模型：
-
-- `ModelProviderAdapter`
-- `ProviderApiAdapter`
-- 当前 DashScope/OpenAI-compatible 供应商实现
-- Node A 与 Node B 复用同一模型接入体系
-
-当前 Runtime 技术栈不包含 pytest / pytest-asyncio。
-
----
-
-## 6. 持久任务模型
-
-外部长期对象仍然是 `ResourceJob`。
-
-下载执行仍然是：
+Executor 的 state sink 负责把真实执行状态持久化；Runtime 内部轻量 reconcile loop 在失败后做：
 
 ```text
-ResourceJob
-→ DownloadExecutionRequest
-→ ExecutionAsset[]
+failure facts
+→ DiagnosisService
+→ retry_same_source / resume_same_source / fix_local_issue / reacquire_source
+→ persist public state
 ```
 
-Stage F 不推翻这套模型。
+不建设 Event Bus、WebSocket、Redis/Kafka 或新的状态框架。
 
-Runtime 本地 SQLite 保存：
-
-- public ResourceJob snapshot；
-- private acquisition context；
-- execution request / asset source facts；
-- execution status；
-- Stage E Range / path / validator facts；
-- pending RecoveryContext；
-- 极简 `recovery_history[]`。
-
-恢复上下文直接附着在当前 Job JSON snapshot，不建设多张恢复表。
-
-模型输入不包含 Cookie、Authorization、完整 HTML、本地绝对路径、`.part` 内容或完整临时 URL token。
-
----
-
-## 7. Stage F：Diagnosis
-
-Diagnosis 是确定性服务，不是 Agent，也不调用 LLM。
-
-最小输出：
+核心语义：
 
 ```text
-action:
-  retry_same_source
-  resume_same_source
-  fix_local_issue
-  reacquire_source
-  stop
+runtime_interrupted
+→ 用户决定何时继续，不自动联网
 
-reason:
-  source_unavailable
-  auth_or_link_expired
-  source_changed
-  network_interrupted
-  disk_full
-  permission_denied
-  range_unavailable
-  local_path_issue
-```
-
-核心规则：
-
-```text
-runtime_interrupted / connection_interrupted
-→ same-source resume/retry
+connection_interrupted
+→ 一次 same-source retry
+→ 仍失败则允许“寻找其他来源”
 
 500 / 502 / 503 / 504
-→ 一次轻量 same-source retry
-→ 仍失败才 reacquire_source
+→ 一次 same-source retry
+→ 仍失败则 reacquire_source
 
 404 / 410
 → source_unavailable
@@ -257,137 +182,20 @@ remote_changed / Range mismatch
 → source_changed
 → waiting_for_source
 
-disk / permission / path
+local disk / permission / path
 → fix_local_issue
 → 不调用 Node B
 ```
 
-公开 Job status 不为 Stage F 爆炸式扩张。短时步骤只放 Runtime internal `recovery_phase`，Task Center 映射成“正在检查来源 / 正在寻找新的下载地址 / 正在验证新来源 / 正在继续下载”。
+`interrupted != waiting_for_source` 继续保持。
 
 ---
 
-## 8. 一键续取
+## 8. Source Verification 与 `.part` 安全
 
-只有 Diagnosis 得出 `reacquire_source` 后：
+Node B 的语义结果不是执行许可。
 
-```text
-status = waiting_for_source
-next_action = continue_acquisition
-```
-
-Task Center 原任务行出现主动作：
-
-```text
-一键续取
-```
-
-不再另设独立 ResumeRecoveryBar，也不允许两套 `/v1/jobs` 轮询。
-
-执行顺序：
-
-### Tier 1 — 当前来源
-
-若来源恢复并能通过确定性检查，直接 same-source resume，不调用 Node B。
-
-### Tier 2 — 已有备用来源
-
-`alternate_sources[]` 先经过确定性验证；安全才切换，不调用 Node B。
-
-### Tier 3 — 浏览器重新智取
-
-当前与备用都不可用：
-
-```text
-Runtime 创建并持久化 RecoveryContext
-→ continue-acquisition 返回 recovery_id / original_page_url
-→ Task Center 打开原页面
-→ Extension 获取 pending recovery
-→ 当前页面重新 Capture
-→ Node B 匹配
-→ Runtime verifier 验证
-```
-
----
-
-## 9. RecoveryContext
-
-保持轻量，至少携带：
-
-- recovery_id / job_id / asset_id；
-- resource title / type；
-- 已确认 variant 摘要与关键版本/平台/架构/package/media 属性；
-- original page URL / title（只在本地）；
-- original source facts（只在本地）；
-- expected total；
-- downloaded bytes；
-- failure reason；
-- confirmed item / plan 摘要。
-
-Runtime 重启后 pending recovery 不丢失。
-
-Extension 只展示用户语言：
-
-```text
-继续下载
-资源名称
-已确认规格
-已保留 xx% 下载进度
-正在当前页面寻找可用下载地址…
-```
-
-不向用户暴露 RecoveryContext、Reacquisition、Candidate、Evidence、Node B 等内部术语。
-
----
-
-## 10. Node B
-
-Node B 的唯一职责：
-
-> 判断新页面中的哪些候选在语义上可能是原任务已经确认的资源。
-
-禁止 Node B：
-
-- 新建/修改 ResourceJob；
-- 删除文件；
-- 切换 Source；
-- 决定 Range append；
-- 证明字节完全相同；
-- 重新生成 ResourcePlan。
-
-恢复链路默认不重新调用 Node A：
-
-```text
-Original Resource Identity
-+
-New Page Candidates
-→ Node B
-```
-
-Node B 复用当前 `ModelProviderAdapter` / `ProviderApiAdapter` / provider/model，不建立第二套供应商体系。
-
-输入保持紧凑：target、失败摘要、候选的 label/filename/content-type/size/附近文本等去敏信息。原始候选 URL 只留在本地 Runtime map，不进入模型 prompt。
-
-输出保持很小：
-
-```json
-{
-  "matches": [{"candidate_id": "c1", "confidence": "high", "reason": "版本、平台、架构和安装类型一致"}],
-  "possible": [{"candidate_id": "c4", "reason": "版本一致但安装类型不同"}],
-  "reject": [{"candidate_id": "c2", "reason": "架构不一致"}]
-}
-```
-
-正常 Recovery 最多一次 Node B 主调用，输出预算约 512 tokens。模型失败时降级为用户手选候选，随后仍然走同一个确定性 verifier。
-
----
-
-## 11. Source Verification
-
-Node B 结果不是执行许可。
-
-强 checksum 若页面已经公开提供可以利用，但第一版不要求所有资源全文件 SHA256。
-
-有 `.part` 时优先使用：
+已有 `.part` 时，通用 fallback 仍然要求：
 
 ```text
 semantic identity
@@ -396,129 +204,162 @@ remote total == original expected total
 +
 Range supported
 +
-已有区间 start / middle / end 的 32~64 KB byte samples 全部与本地 .part 一致
+已有区间 start / middle / end 小范围 byte samples 与本地 .part 一致
 ```
 
-该证据称为：
+任一不一致：
 
 ```text
-sample_match
-```
-
-不是 `cryptographically_identical`。
-
-Source B 不支持 Range：
-
-```text
-可以认为是正确资源
-但不能复用旧 .part 自动 append
-```
-
-byte sample 任一不一致：
-
-```text
-verification = mismatch
-→ reject
+reject
 → 禁止 switch_source
 → 禁止 append
 → 原 .part 保持不变
 ```
 
----
+若真实页面明确提供可靠 checksum，可以保存并优先利用，但不建设强制全文件 hash、chunk hash tree 或新的 identity 架构。
 
-## 12. Source Switch
-
-验证通过后只切换原 ExecutionAsset：
-
-```text
-primary_source = Source B
-```
-
-必须保留：
+验证通过后只更新原 ExecutionAsset 的 primary source，保留：
 
 ```text
 same job_id
 same asset_id
 same final_path
 same part_path
+offset = filesystem .part size
 ```
 
-offset 永远来自磁盘实际 `.part` size。
-
-Source B 随后的真实下载仍必须满足 Stage E 的 Range 安全条件：
-
-```text
-Range: bytes=<actual_part_size>-
-→ HTTP 206
-→ exact Content-Range start
-→ exact total
-→ validator / remote facts safe
-→ append existing .part
-```
-
-否则停止，不污染旧进度。
+Source B 必须返回安全的 HTTP 206 / exact Content-Range 后才能 append。
 
 ---
 
-## 13. 受控故障 Demo
+## 9. 模型隐私
 
-`demo/fault-scenarios/recovery_server.py` 提供合法自控内容：
+完整 Source URL 只属于本地执行层。
 
-- Source A：正常文件 + Range，可切换为永久失效；
-- Source B：不同 URL、与 A 完全相同字节、支持 Range；
-- Source C：名称和大小相似，但实际字节不同。
+Node A / Node B 模型输入不得包含：
 
-Stage F 真人主验收只认下面完整链路：
+- query token / signed secret；
+- Cookie；
+- Authorization；
+- 完整临时 URL；
+- 本地绝对路径；
+- `.part` 内容；
+- 完整 HTML。
+
+Node A 使用既有 CloudAnalysisRequest 隐私边界；Node B 除排除 raw source 外，在 Runtime 再对候选/目标文本做 URL 与凭证样式去敏。
+
+---
+
+## 10. Stage G 开发纪律
 
 ```text
-Source A
-→ 真下载到 30%~50%
-→ A 永久失效
-→ Diagnosis
-→ waiting_for_source
-→ 一键续取
-→ Browser Reacquisition
+不写 pytest
+不运行 pytest
+不新增测试框架
+直接 main 小步开发
+不创建 agent branch
+不创建 Draft PR
+```
+
+基础检查：
+
+```bash
+uv run --project services/runtime python -m compileall services/runtime/src
+
+corepack pnpm typecheck
+corepack pnpm --filter @xunlei-zhiqu/extension build
+corepack pnpm --filter @xunlei-zhiqu/task-center build
+```
+
+能力只以真实网站、真实 Chrome/Edge、真实公网 HTTP/HTTPS、真实模型、真实下载、真实故障和真人使用判断。
+
+`demo/fault-scenarios/` 只作为 Stage F 历史调试工具保留；Stage G 不继续开发、不部署到公网、不作为 PASS 条件。
+
+---
+
+## 11. Stage G 真实使用范围
+
+不做固定网站测试矩阵，也不写 hostname 特判。真实试用应覆盖明显不同的 DOM / 下载路径，例如：
+
+- 简单软件下载页；
+- 版本/平台/架构复杂的软件发布页；
+- GitHub Release 或类似 Release 列表；
+- PDF / 数据文件；
+- 普通图片、srcset/高清图；
+- 多图片选择与多 Asset 落盘；
+- 普通 HTTP MP4/WebM/大文件；
+- 302 Redirect → CDN → actual file。
+
+若遇到登录、CAPTCHA、DRM、防盗链或特殊鉴权，记录为当前 Limit，不绕过安全机制。
+
+Magnet、Torrent、M3U8、DASH、blob 等当前执行器不能完成的协议应明确告诉用户“当前版本暂不支持这种下载方式”，不创建假下载任务。
+
+---
+
+## 12. Stage G 最关键真人验收
+
+不使用 localhost。
+
+```text
+真实网站 A
+→ Extension + Node A
+→ 真实公网 Source A 下载到 20%~50%
+→ 网络层使 Source A 不可连接
+→ 一次 same-source retry 失败
+→ 寻找其他来源
+→ 用户进入真实网站 B
+→ Extension 保持 Recovery Mode
+→ 当前页 Capture
 → Node B
-→ B / C 进入验证
-→ B sample_match
-→ C mismatch
-→ Source A → B
-→ 原 .part 从旧 offset 增长
+→ Runtime verifier
+→ 同一个 ResourceJob
+→ 同一个 .part
+→ Source B HTTP Range
+→ 从旧百分比继续
 → 100%
+→ 最终内容正确
 ```
 
-同时真人看三条边界：
+Source A/B 必须是真实第三方公开合法资源，最好不同 hostname；可对真实 Source A 做本机网络层故障注入，但禁止为了验收部署远程 fake server。
 
-1. 本地路径/磁盘类错误不触发 Node B；
-2. 临时网络中断优先当前 Source；
-3. Source C 被 verifier 拒绝且 `.part` 不被污染。
-
-只有上述主链路在真实浏览器/Runtime 中成功，Stage F 才能标记完成。
+最终文件优先使用官方 SHA256/SHA512；没有官方 checksum 时，可人工完整下载 Source B 参考文件对比 hash，但这不进入产品代码。
 
 ---
 
-## 14. 当前明确不做
+## 13. Stage G 完成条件
 
-Stage F 不扩张到：
+最终真人使用至少应覆盖：
 
-- 通用搜索引擎或 Google/Bing 全网搜索；
-- 多 Agent；
-- 复杂 ResourceGraph；
-- Event Sourcing；
-- WebSocket；
-- Redis/Kafka；
-- 新数据库框架；
-- 强制全文件 hash / chunk hash tree；
-- P2P / BT / Magnet executor；
-- HLS / DASH downloader；
-- 多线程 HTTP 下载；
-- 真实迅雷账号；
-- 云 AI Gateway 产品化；
-- Native Messaging；
-- 付费体系；
-- 视觉模型；
-- Node A 新一轮性能优化；
-- 登录、付费墙、CAPTCHA、DRM 绕过；
-- 下载后自动执行未知文件。
+```text
+多个结构不同的真实软件下载 / 文件网站
+1 个真实图片场景
+1 个多图片场景
+1 个真实直链媒体 / 大文件场景
+1 个 Redirect / CDN 场景
+1 个真实跨网站 Source A → Source B 恢复
+少量非开发者自然试用
+```
 
-当前 Demo 的重点只有一个：**跨来源恢复 Agent 闭环。**
+数量服从质量，不做为了打勾而扩张的测试平台。
+
+只有真实使用证据完成后才把 Stage G 标记为完成。Code Agent 无法替代真实 Chrome、公网实际下载和真人反馈时，必须明确写“代码已准备，等待真人验收”，不能用 localhost/fixture/mock 宣布 PASS。
+
+---
+
+## 14. Stage G 之后
+
+Stage G 完成后 Code Freeze。
+
+不再问“还能加什么”，只允许：
+
+```text
+真实使用
+→ 修 Bug
+→ 产品文案/体验打磨
+→ 录 Demo
+→ 比赛材料
+```
+
+最终目标不是“生产可用/百万用户稳定”，而是：
+
+> **真实 Browser Extension + 真实 Model + 真实公网资源 + 真实下载 + 真实长期任务 + 真实恢复的完整可试用原型。**
