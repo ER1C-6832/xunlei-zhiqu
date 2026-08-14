@@ -1,189 +1,25 @@
-import type {
-  AnalysisStreamEvent,
-  CaptureBatch,
-  LinkFavoriteCreateRequest,
-  LinkHistoryItem,
-  ManualJobCreateRequest,
-  ResourceJobCreateRequest,
-  ResourceJobSnapshot,
-  ResourcePlan
-} from '@xunlei-zhiqu/contracts';
-import type {
-  TaskCenterTarget,
-  TransportAnalyzeResourcesOptions,
-  ZhiquServiceTransport
-} from '../zhiquServiceClient';
-
+import type { AnalysisStreamEvent, CaptureBatch, LinkFavoriteCreateRequest, LinkHistoryItem, ManualJobCreateRequest, PendingRecoveryView, RecoveryCandidateChoiceResult, RecoveryCaptureResult, ResourceJobCreateRequest, ResourceJobSnapshot, ResourcePlan } from '@xunlei-zhiqu/contracts';
+import type { TaskCenterTarget, TransportAnalyzeResourcesOptions, ZhiquServiceTransport } from '../zhiquServiceClient';
 const DEFAULT_RUNTIME_ENDPOINT = 'http://127.0.0.1:8765';
-
-export class ZhiquTransportError extends Error {
-  constructor(
-    message: string,
-    readonly status: number | null = null
-  ) {
-    super(message);
-    this.name = 'ZhiquTransportError';
-  }
-}
-
+export class ZhiquTransportError extends Error { constructor(message: string, readonly status: number | null = null) { super(message); this.name = 'ZhiquTransportError'; } }
 export class LocalHttpTransport implements ZhiquServiceTransport {
-  private readonly endpoint: string;
-  private readonly sessionToken: string | null;
-
-  constructor(
-    endpoint = getRuntimeEndpoint(),
-    sessionToken = getRuntimeSessionToken()
-  ) {
-    this.endpoint = normalizeEndpoint(endpoint);
-    this.sessionToken = sessionToken;
-  }
-
-  analyzeResources(
-    batch: CaptureBatch,
-    options: TransportAnalyzeResourcesOptions
-  ): Promise<ResourcePlan> {
-    const forceRefresh = options.forceRefresh === true;
-    const suffix = forceRefresh ? '?refresh=true' : '';
-    // AnalysisCredential is a logical authorization handle. The local Demo transport
-    // intentionally does not serialize it into CaptureBatch; future client/cloud
-    // transports resolve the handle at their own authentication boundary.
-    if (options.onEvent) {
-      return this.postAnalysisStream(
-        `/v1/capture/analyze-stream${suffix}`,
-        batch,
-        options.onEvent,
-        forceRefresh ? '重新智能分析失败' : '智能分析失败'
-      );
-    }
-    return this.postJson<ResourcePlan>(
-      `/v1/capture/analyze${suffix}`,
-      batch,
-      forceRefresh ? '重新智能分析失败' : '智能分析失败'
-    );
-  }
-
-  createJob(request: ResourceJobCreateRequest): Promise<ResourceJobSnapshot> {
-    return this.postJson<ResourceJobSnapshot>('/v1/jobs', request, '创建下载任务失败');
-  }
-
-  createManualJob(request: ManualJobCreateRequest): Promise<ResourceJobSnapshot> {
-    return this.postJson<ResourceJobSnapshot>('/v1/jobs/manual', request, '创建任务失败');
-  }
-
-  favoriteResource(request: LinkFavoriteCreateRequest): Promise<LinkHistoryItem> {
-    return this.postJson<LinkHistoryItem>('/v1/link-library/favorites', request, '收藏失败');
-  }
-
-  async openTaskCenter(target: TaskCenterTarget): Promise<void> {
-    await chrome.tabs.create({ url: `${this.endpoint}/app/#/${target}` });
-  }
-
-  private async postAnalysisStream(
-    path: string,
-    body: CaptureBatch,
-    onEvent: (event: AnalysisStreamEvent) => void,
-    fallback: string
-  ): Promise<ResourcePlan> {
-    const response = await this.post(path, body, fallback);
-    if (!response.body) {
-      throw new ZhiquTransportError(`${fallback}：Runtime 未返回可读取的分析流。`, response.status);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let result: ResourcePlan | null = null;
-
-    const consumeLine = (line: string) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      let event: AnalysisStreamEvent;
-      try {
-        event = JSON.parse(trimmed) as AnalysisStreamEvent;
-      } catch {
-        throw new ZhiquTransportError(`${fallback}：Runtime 返回了无法解析的分析事件。`, response.status);
-      }
-      if (event.type === 'error') {
-        throw new ZhiquTransportError(`${fallback}：${event.message}`, response.status);
-      }
-      onEvent(event);
-      if (event.type === 'result') result = event.plan;
-    };
-
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done });
-        let newline = buffer.indexOf('\n');
-        while (newline >= 0) {
-          consumeLine(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-          newline = buffer.indexOf('\n');
-        }
-        if (done) break;
-      }
-      if (buffer.trim()) consumeLine(buffer);
-    } finally {
-      reader.releaseLock();
-    }
-
-    if (!result) {
-      throw new ZhiquTransportError(`${fallback}：分析流结束但没有返回完整结果。`, response.status);
-    }
-    return result;
-  }
-
-  private async postJson<T>(path: string, body: unknown, fallback: string): Promise<T> {
-    const response = await this.post(path, body, fallback);
-    return response.json() as Promise<T>;
-  }
-
-  private async post(path: string, body: unknown, fallback: string): Promise<Response> {
-    const headers = new Headers({ 'Content-Type': 'application/json' });
-    if (this.sessionToken) headers.set('X-Zhiqu-Session', this.sessionToken);
-
-    let response: Response;
-    try {
-      response = await fetch(`${this.endpoint}${path}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body)
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new ZhiquTransportError(`${fallback}：${detail}`);
-    }
-
-    if (!response.ok) {
-      throw new ZhiquTransportError(
-        `${fallback}：${await responseDetail(response)}`,
-        response.status
-      );
-    }
-    return response;
-  }
+  private readonly endpoint: string; private readonly sessionToken: string | null;
+  constructor(endpoint = getRuntimeEndpoint(), sessionToken = getRuntimeSessionToken()) { this.endpoint = normalizeEndpoint(endpoint); this.sessionToken = sessionToken; }
+  analyzeResources(batch: CaptureBatch, options: TransportAnalyzeResourcesOptions): Promise<ResourcePlan> { const forceRefresh = options.forceRefresh === true; const suffix = forceRefresh ? '?refresh=true' : ''; if (options.onEvent) return this.postAnalysisStream(`/v1/capture/analyze-stream${suffix}`, batch, options.onEvent, forceRefresh ? '重新智能分析失败' : '智能分析失败'); return this.postJson<ResourcePlan>(`/v1/capture/analyze${suffix}`, batch, forceRefresh ? '重新智能分析失败' : '智能分析失败'); }
+  createJob(request: ResourceJobCreateRequest): Promise<ResourceJobSnapshot> { return this.postJson('/v1/jobs', request, '创建下载任务失败'); }
+  createManualJob(request: ManualJobCreateRequest): Promise<ResourceJobSnapshot> { return this.postJson('/v1/jobs/manual', request, '创建任务失败'); }
+  favoriteResource(request: LinkFavoriteCreateRequest): Promise<LinkHistoryItem> { return this.postJson('/v1/link-library/favorites', request, '收藏失败'); }
+  listPendingRecoveries(): Promise<PendingRecoveryView[]> { return this.getJson('/v1/recovery/pending', '读取续取任务失败'); }
+  submitRecoveryCapture(recoveryId: string, batch: CaptureBatch): Promise<RecoveryCaptureResult> { return this.postJson(`/v1/recovery/${encodeURIComponent(recoveryId)}/capture`, { schema_version: '0.1', capture: batch }, '恢复资源匹配失败'); }
+  chooseRecoveryCandidate(recoveryId: string, candidateId: string): Promise<RecoveryCandidateChoiceResult> { return this.postJson(`/v1/recovery/${encodeURIComponent(recoveryId)}/candidates/${encodeURIComponent(candidateId)}`, {}, '来源验证失败'); }
+  async openTaskCenter(target: TaskCenterTarget): Promise<void> { await chrome.tabs.create({ url: `${this.endpoint}/app/#/${target}` }); }
+  private async postAnalysisStream(path: string, body: CaptureBatch, onEvent: (event: AnalysisStreamEvent) => void, fallback: string): Promise<ResourcePlan> { const response = await this.post(path, body, fallback); if (!response.body) throw new ZhiquTransportError(`${fallback}：Runtime 未返回可读取的分析流。`, response.status); const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let result: ResourcePlan | null = null; const consumeLine = (line: string) => { const trimmed = line.trim(); if (!trimmed) return; let event: AnalysisStreamEvent; try { event = JSON.parse(trimmed) as AnalysisStreamEvent; } catch { throw new ZhiquTransportError(`${fallback}：Runtime 返回了无法解析的分析事件。`, response.status); } if (event.type === 'error') throw new ZhiquTransportError(`${fallback}：${event.message}`, response.status); onEvent(event); if (event.type === 'result') result = event.plan; }; try { while (true) { const { value, done } = await reader.read(); buffer += decoder.decode(value, { stream: !done }); let newline = buffer.indexOf('\n'); while (newline >= 0) { consumeLine(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1); newline = buffer.indexOf('\n'); } if (done) break; } if (buffer.trim()) consumeLine(buffer); } finally { reader.releaseLock(); } if (!result) throw new ZhiquTransportError(`${fallback}：分析流结束但没有返回完整结果。`, response.status); return result; }
+  private async getJson<T>(path: string, fallback: string): Promise<T> { const response = await this.request(path, { method: 'GET', cache: 'no-store' }, fallback); return response.json() as Promise<T>; }
+  private async postJson<T>(path: string, body: unknown, fallback: string): Promise<T> { const response = await this.post(path, body, fallback); return response.json() as Promise<T>; }
+  private post(path: string, body: unknown, fallback: string): Promise<Response> { return this.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fallback); }
+  private async request(path: string, init: RequestInit, fallback: string): Promise<Response> { const headers = new Headers(init.headers); if (this.sessionToken) headers.set('X-Zhiqu-Session', this.sessionToken); let response: Response; try { response = await fetch(`${this.endpoint}${path}`, { ...init, headers }); } catch (error) { const detail = error instanceof Error ? error.message : String(error); throw new ZhiquTransportError(`${fallback}：${detail}`); } if (!response.ok) throw new ZhiquTransportError(`${fallback}：${await responseDetail(response)}`, response.status); return response; }
 }
-
-export function getRuntimeEndpoint(): string {
-  const configured = import.meta.env.VITE_RUNTIME_URL?.trim();
-  return normalizeEndpoint(configured || DEFAULT_RUNTIME_ENDPOINT);
-}
-
-export function getRuntimeSessionToken(): string | null {
-  const configured = import.meta.env.VITE_RUNTIME_SESSION?.trim();
-  return configured || null;
-}
-
-function normalizeEndpoint(value: string): string {
-  return value.trim().replace(/\/+$/, '') || DEFAULT_RUNTIME_ENDPOINT;
-}
-
-async function responseDetail(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim();
-  } catch {
-    // Fall through to the stable HTTP status when the response is not JSON.
-  }
-  return `HTTP ${response.status}`;
-}
+export function getRuntimeEndpoint(): string { const configured = import.meta.env.VITE_RUNTIME_URL?.trim(); return normalizeEndpoint(configured || DEFAULT_RUNTIME_ENDPOINT); }
+export function getRuntimeSessionToken(): string | null { const configured = import.meta.env.VITE_RUNTIME_SESSION?.trim(); return configured || null; }
+function normalizeEndpoint(value: string): string { return value.trim().replace(/\/+$/, '') || DEFAULT_RUNTIME_ENDPOINT; }
+async function responseDetail(response: Response): Promise<string> { try { const body = await response.json() as { detail?: unknown }; if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim(); } catch {} return `HTTP ${response.status}`; }
