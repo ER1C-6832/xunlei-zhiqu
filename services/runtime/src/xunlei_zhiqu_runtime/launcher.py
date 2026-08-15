@@ -33,6 +33,13 @@ def _log_path() -> Path:
     return _user_state_dir() / "logs" / "runtime.log"
 
 
+def _stabilize_packaged_working_directory() -> None:
+    """Prevent a frozen build from accidentally consuming an unrelated cwd .env."""
+    if not getattr(sys, "frozen", False):
+        return
+    os.chdir(Path(sys.executable).resolve().parent)
+
+
 def _configure_logging() -> None:
     log_path = _log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,6 +174,12 @@ def _open_when_ready() -> None:
 
 
 def main() -> int:
+    try:
+        _stabilize_packaged_working_directory()
+    except OSError as exc:
+        _show_error(f"迅雷智取无法进入安装目录。\n\n{exc}")
+        return 2
+
     _configure_logging()
     _apply_release_defaults()
     logger = logging.getLogger(__name__)

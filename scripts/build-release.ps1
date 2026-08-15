@@ -64,13 +64,13 @@ function Find-InnoSetupCompiler {
     return $null
 }
 
-function Read-LocalSupplierKey {
-    $envPath = Join-Path $RepoRoot ".env"
-    if (-not (Test-Path $envPath)) {
+function Read-DotEnvValue([string]$Path, [string]$Name) {
+    if (-not (Test-Path $Path)) {
         return ""
     }
-    foreach ($line in Get-Content $envPath) {
-        if ($line -match '^\s*MODEL_API_KEY\s*=\s*(.*)\s*$') {
+    $pattern = '^\s*' + [regex]::Escape($Name) + '\s*=\s*(.*)\s*$'
+    foreach ($line in Get-Content $Path) {
+        if ($line -match $pattern) {
             return $Matches[1].Trim().Trim('"').Trim("'")
         }
     }
@@ -80,13 +80,50 @@ function Read-LocalSupplierKey {
 function Assert-ReleaseTree([string]$Path) {
     $forbidden = Get-ChildItem $Path -Recurse -Force -File | Where-Object {
         $_.Name -eq ".env" -or
-        $_.Name -like "*.env.local" -or
+        $_.Name -like ".env.*" -or
         $_.Extension -in @(".db", ".sqlite3", ".part") -or
         $_.FullName -match "[\\/]benchmarks?[\\/]"
     }
     if ($forbidden) {
         $names = ($forbidden | ForEach-Object { $_.FullName }) -join "`n"
         throw "Forbidden development/private files found in release tree:`n$names"
+    }
+}
+
+function Assert-NoSensitiveFrontendText([string]$Path, [string[]]$Needles) {
+    $textFiles = Get-ChildItem $Path -Recurse -Force -File | Where-Object {
+        $_.Extension -in @(".js", ".mjs", ".cjs", ".json", ".html", ".css", ".txt")
+    }
+    foreach ($needle in $Needles) {
+        if ([string]::IsNullOrWhiteSpace($needle) -or $needle.Length -lt 8) {
+            continue
+        }
+        foreach ($file in $textFiles) {
+            $text = [IO.File]::ReadAllText($file.FullName)
+            if ($text.Contains($needle)) {
+                throw "Sensitive/local development value leaked into frontend build: $($file.FullName)"
+            }
+        }
+    }
+}
+
+function Save-ProcessEnv([string[]]$Names) {
+    $snapshot = @{}
+    foreach ($name in $Names) {
+        $snapshot[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+    return $snapshot
+}
+
+function Restore-ProcessEnv([hashtable]$Snapshot) {
+    foreach ($name in $Snapshot.Keys) {
+        $value = $Snapshot[$name]
+        if ($null -eq $value) {
+            [Environment]::SetEnvironmentVariable($name, $null, "Process")
+        }
+        else {
+            [Environment]::SetEnvironmentVariable($name, [string]$value, "Process")
+        }
     }
 }
 
@@ -111,18 +148,20 @@ Write-Host "Building 迅雷智取 Competition Release $Version"
 $GatewayBaseUrl = $GatewayBaseUrl.Trim().TrimEnd([char]'/')
 $GatewayModel = $GatewayModel.Trim()
 $GatewayToken = $GatewayToken.Trim()
+$LocalSupplierKey = Read-DotEnvValue (Join-Path $RepoRoot ".env") "MODEL_API_KEY"
+$LocalExtensionSession = Read-DotEnvValue (Join-Path $RepoRoot "apps\extension\.env") "VITE_RUNTIME_SESSION"
 
+if ($GatewayBaseUrl -and $GatewayBaseUrl -notmatch '^https://') {
+    throw "GatewayBaseUrl must use HTTPS for a Competition Release."
+}
 if ($GatewayBaseUrl -match '(?i)(api\.openai\.com|dashscope\.aliyuncs\.com|api\.anthropic\.com)') {
     throw "GatewayBaseUrl points at a model supplier endpoint. Competition Release requires a dedicated Competition Gateway."
 }
 if ($GatewayBaseUrl -and -not $GatewayModel) {
     throw "GatewayModel is required when GatewayBaseUrl is configured."
 }
-if ($GatewayToken) {
-    $localSupplierKey = Read-LocalSupplierKey
-    if ($localSupplierKey -and $GatewayToken -eq $localSupplierKey) {
-        throw "GatewayToken matches MODEL_API_KEY in local .env. Refusing to package a supplier credential."
-    }
+if ($GatewayToken -and $LocalSupplierKey -and $GatewayToken -eq $LocalSupplierKey) {
+    throw "GatewayToken matches MODEL_API_KEY in local .env. Refusing to package a supplier credential."
 }
 if (-not $GatewayBaseUrl) {
     if ($GatewayToken) {
@@ -143,13 +182,36 @@ Invoke-Step "Workspace typecheck" {
     Push-Location $RepoRoot
     try { & corepack pnpm typecheck } finally { Pop-Location }
 }
-Invoke-Step "Build Task Center" {
-    Push-Location $RepoRoot
-    try { & corepack pnpm --filter "@xunlei-zhiqu/task-center" build } finally { Pop-Location }
+
+$frontendEnvNames = @(
+    "VITE_RUNTIME_URL",
+    "VITE_RUNTIME_SESSION",
+    "VITE_ZHIQU_CAPABILITY_MODE",
+    "VITE_ZHIQU_ANALYSIS_CREDENTIAL",
+    "VITE_TASK_CENTER_FIXTURES"
+)
+$frontendEnv = Save-ProcessEnv $frontendEnvNames
+try {
+    # Existing developer .env files must not shape Competition frontend output.
+    # Whitespace is intentional: Task Center trims it to same-origin and the
+    # Extension trims it to its localhost default / no session token.
+    $env:VITE_RUNTIME_URL = " "
+    $env:VITE_RUNTIME_SESSION = " "
+    $env:VITE_ZHIQU_CAPABILITY_MODE = "client_runtime"
+    $env:VITE_ZHIQU_ANALYSIS_CREDENTIAL = "demo"
+    $env:VITE_TASK_CENTER_FIXTURES = "false"
+
+    Invoke-Step "Build Task Center" {
+        Push-Location $RepoRoot
+        try { & corepack pnpm --filter "@xunlei-zhiqu/task-center" build } finally { Pop-Location }
+    }
+    Invoke-Step "Build Extension" {
+        Push-Location $RepoRoot
+        try { & corepack pnpm --filter "@xunlei-zhiqu/extension" build } finally { Pop-Location }
+    }
 }
-Invoke-Step "Build Extension" {
-    Push-Location $RepoRoot
-    try { & corepack pnpm --filter "@xunlei-zhiqu/extension" build } finally { Pop-Location }
+finally {
+    Restore-ProcessEnv $frontendEnv
 }
 
 if (-not (Test-Path (Join-Path $TaskCenterDist "index.html"))) {
@@ -158,6 +220,15 @@ if (-not (Test-Path (Join-Path $TaskCenterDist "index.html"))) {
 if (-not (Test-Path (Join-Path $ExtensionDist "manifest.json"))) {
     throw "Extension build did not produce dist/manifest.json"
 }
+if (Test-Path (Join-Path $ExtensionDist "src")) {
+    throw "Extension release unexpectedly contains src/."
+}
+if (Get-ChildItem $ExtensionDist -Recurse -File -Filter "*.map") {
+    throw "Extension release unexpectedly contains source maps."
+}
+
+Assert-NoSensitiveFrontendText $TaskCenterDist @($RepoRoot, $LocalSupplierKey, $LocalExtensionSession)
+Assert-NoSensitiveFrontendText $ExtensionDist @($RepoRoot, $LocalSupplierKey, $LocalExtensionSession)
 
 $previousConsoleFlag = $env:XUNLEI_ZHIQU_CONSOLE_BUILD
 try {
@@ -189,6 +260,9 @@ $ReleaseConfig = [ordered]@{
     node_a_profile = "pipeline_v3"
 }
 $ReleaseConfigJson = $ReleaseConfig | ConvertTo-Json -Depth 4
+if ($LocalSupplierKey -and $ReleaseConfigJson.Contains($LocalSupplierKey)) {
+    throw "Supplier MODEL_API_KEY would leak into release-config.json."
+}
 [IO.File]::WriteAllText(
     (Join-Path $RuntimeDir "release-config.json"),
     $ReleaseConfigJson,
