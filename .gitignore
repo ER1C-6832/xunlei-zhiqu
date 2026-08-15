@@ -28,3 +28,6 @@ services/runtime/data/
 *.db
 *.db-wal
 *.db-shm
+
+# Local release artifacts and PyInstaller work output
+artifacts/

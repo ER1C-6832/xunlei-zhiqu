@@ -1,0 +1,2 @@
+# Build-only dependency. Never add PyInstaller to the shipped Runtime dependency set.
+pyinstaller>=6,<7
