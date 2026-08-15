@@ -7,6 +7,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -75,10 +76,14 @@ def _release_config_path() -> Path | None:
     return None
 
 
+def _disable_ai(reason: str) -> None:
+    os.environ["MODEL_PROVIDER"] = "unavailable"
+    os.environ["MODEL_NAME"] = "competition-ai-unavailable"
+    os.environ.pop("MODEL_API_KEY", None)
+    logging.getLogger(__name__).warning("competition_ai_unavailable reason=%s", reason)
+
+
 def _apply_release_defaults() -> None:
-    # The packaged Runtime always stays on localhost. Environment/.env keeps its
-    # existing role in source development, but cannot move a competition build
-    # onto a LAN-facing address.
     if getattr(sys, "frozen", False):
         os.environ["RUNTIME_HOST"] = HOST
         os.environ["RUNTIME_PORT"] = str(PORT)
@@ -91,25 +96,47 @@ def _apply_release_defaults() -> None:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         logging.getLogger(__name__).warning("release_config_invalid path=%s error=%s", path, exc)
+        _disable_ai("release_config_invalid")
+        return
+
+    ai_mode = str(payload.get("ai_mode") or "").strip().lower()
+    profile = str(payload.get("node_a_profile") or "pipeline_v3").strip()
+
+    if ai_mode == "embedded_supplier":
+        provider = str(payload.get("model_provider") or "").strip().lower()
+        base_url = str(payload.get("model_base_url") or "").strip().rstrip("/")
+        model = str(payload.get("model_name") or "").strip()
+        api_key = str(payload.get("model_api_key") or "").strip()
+        if (
+            provider not in {"openai", "dashscope", "openai_compatible"}
+            or not base_url.startswith("https://")
+            or not model
+            or not api_key
+        ):
+            _disable_ai("embedded_supplier_config_invalid")
+            return
+
+        os.environ["MODEL_PROVIDER"] = provider
+        os.environ["MODEL_BASE_URL"] = base_url
+        os.environ["MODEL_NAME"] = model
+        os.environ["MODEL_API_KEY"] = api_key
+        os.environ["NODE_A_PROFILE"] = profile
+        logging.getLogger(__name__).warning(
+            "embedded_supplier_credential_active provider=%s model=%s profile=%s",
+            provider,
+            model,
+            profile,
+        )
         return
 
     base_url = str(payload.get("gateway_base_url") or "").strip().rstrip("/")
     model = str(payload.get("gateway_model") or "").strip()
     token = str(payload.get("gateway_token") or "").strip()
-    profile = str(payload.get("node_a_profile") or "pipeline_v3").strip()
 
     if not base_url or not model:
-        # Packaging without a Competition Gateway must still be installable and
-        # usable for local task/download acceptance. Fail only semantic model
-        # calls; never fall back to a supplier default or a fake fixture model.
-        os.environ["MODEL_PROVIDER"] = "unavailable"
-        os.environ["MODEL_NAME"] = "competition-gateway-unavailable"
-        os.environ.pop("MODEL_API_KEY", None)
-        logging.getLogger(__name__).warning("competition_gateway_not_configured ai_disabled=true")
+        _disable_ai("competition_gateway_not_configured")
         return
 
-    # A frozen release is governed by release-config.json, not by inherited
-    # developer/supplier environment variables on the machine that launches it.
     os.environ["MODEL_PROVIDER"] = "openai_compatible"
     os.environ["MODEL_BASE_URL"] = base_url
     os.environ["MODEL_NAME"] = model
@@ -165,15 +192,23 @@ def _open_task_center() -> None:
     webbrowser.open(TASK_CENTER_URL, new=2)
 
 
-def _show_error(message: str) -> None:
-    logging.getLogger(__name__).error("launcher_error message=%s", message)
+def _show_message(title: str, message: str, flags: int) -> None:
     if os.name == "nt":
         try:
-            ctypes.windll.user32.MessageBoxW(None, message, "迅雷智取启动失败", 0x10)
+            ctypes.windll.user32.MessageBoxW(None, message, title, flags)
             return
         except Exception:
             pass
-    print(message, file=sys.stderr)
+    print(f"{title}: {message}", file=sys.stderr)
+
+
+def _show_error(message: str) -> None:
+    logging.getLogger(__name__).error("launcher_error message=%s", message)
+    _show_message("迅雷智取启动失败", message, 0x10)
+
+
+def _show_info(title: str, message: str) -> None:
+    _show_message(title, message, 0x40)
 
 
 def _open_when_ready() -> None:
@@ -181,6 +216,124 @@ def _open_when_ready() -> None:
         _open_task_center()
         return
     _show_error(f"迅雷智取 Runtime 启动超时。\n\n日志：{_log_path()}")
+
+
+def _extension_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "browser-extension"
+    return Path(__file__).resolve().parents[4] / "apps" / "extension" / "dist"
+
+
+def _browser_candidates(browser: str) -> list[Path]:
+    local_app_data = os.getenv("LOCALAPPDATA", "")
+    program_files = os.getenv("ProgramFiles", "")
+    program_files_x86 = os.getenv("ProgramFiles(x86)", "")
+    roots = [Path(value) for value in (local_app_data, program_files, program_files_x86) if value]
+    if browser == "chrome":
+        suffix = Path("Google") / "Chrome" / "Application" / "chrome.exe"
+    else:
+        suffix = Path("Microsoft") / "Edge" / "Application" / "msedge.exe"
+    return [root / suffix for root in roots]
+
+
+def _find_browser_executable(browser: str) -> Path | None:
+    return next((path for path in _browser_candidates(browser) if path.exists()), None)
+
+
+def _preferred_browser() -> str:
+    if os.name == "nt":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+            ) as key:
+                prog_id = str(winreg.QueryValueEx(key, "ProgId")[0]).lower()
+                if "chromehtml" in prog_id:
+                    return "chrome"
+                if "msedgehtm" in prog_id:
+                    return "edge"
+        except OSError:
+            pass
+
+    if _find_browser_executable("chrome") is not None:
+        return "chrome"
+    if _find_browser_executable("edge") is not None:
+        return "edge"
+    return "chrome"
+
+
+def _copy_extension_path_to_clipboard(path: Path) -> None:
+    if os.name != "nt":
+        return
+    try:
+        subprocess.run(
+            ["clip.exe"],
+            input=str(path),
+            text=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError:
+        return
+
+
+def _open_extension_install_helper(browser: str) -> int:
+    if browser == "auto":
+        browser = _preferred_browser()
+    if browser not in {"chrome", "edge"}:
+        _show_error("未知浏览器类型；扩展安装助手仅支持 Chrome / Edge。")
+        return 2
+
+    extension_dir = _extension_dir()
+    if not (extension_dir / "manifest.json").exists():
+        _show_error(f"没有找到浏览器扩展文件。\n\n目录：{extension_dir}")
+        return 2
+
+    browser_exe = _find_browser_executable(browser)
+    browser_url = "chrome://extensions/" if browser == "chrome" else "edge://extensions/"
+    browser_name = "Chrome" if browser == "chrome" else "Edge"
+
+    try:
+        subprocess.Popen(["explorer.exe", str(extension_dir)])
+    except OSError:
+        pass
+    _copy_extension_path_to_clipboard(extension_dir)
+
+    if browser_exe is not None:
+        try:
+            subprocess.Popen([str(browser_exe), browser_url])
+        except OSError:
+            browser_exe = None
+
+    if browser_exe is None:
+        _show_info(
+            "迅雷智取浏览器扩展",
+            f"扩展已经随迅雷智取安装到：\n{extension_dir}\n\n"
+            f"没有自动找到 {browser_name}。请手动打开 {browser_url}，开启开发者模式，"
+            "点击“加载已解压的扩展程序”，选择上面的目录。\n\n扩展目录路径已复制到剪贴板。",
+        )
+        return 0
+
+    _show_info(
+        "迅雷智取浏览器扩展",
+        f"已经打开 {browser_name} 扩展管理页和迅雷智取扩展目录。\n\n"
+        "浏览器安全策略不允许普通安装器静默加载未上架扩展，因此还需要你确认一次：\n"
+        "1. 开启“开发者模式”\n"
+        "2. 点击“加载已解压的扩展程序”\n"
+        f"3. 选择：{extension_dir}\n\n扩展目录路径已复制到剪贴板。",
+    )
+    return 0
+
+
+def _handle_command_line() -> int | None:
+    if len(sys.argv) < 2:
+        return None
+    if sys.argv[1] != "--install-extension":
+        return None
+    browser = sys.argv[2].strip().lower() if len(sys.argv) >= 3 else "auto"
+    return _open_extension_install_helper(browser)
 
 
 def main() -> int:
@@ -191,6 +344,10 @@ def main() -> int:
         return 2
 
     _configure_logging()
+    command_result = _handle_command_line()
+    if command_result is not None:
+        return command_result
+
     _apply_release_defaults()
     logger = logging.getLogger(__name__)
 
@@ -200,7 +357,6 @@ def main() -> int:
         return 0
 
     if _port_in_use():
-        # A concurrently launched copy may still be completing startup.
         if _wait_for_health(2.5):
             logger.info("concurrent_runtime_detected")
             _open_task_center()
@@ -230,8 +386,6 @@ def main() -> int:
     try:
         server.run()
     except SystemExit:
-        # A near-simultaneous launcher can win the bind race. If it became a
-        # healthy 迅雷智取 Runtime, treat this copy as the secondary launcher.
         if _wait_for_health(2.5):
             _open_task_center()
             return 0
