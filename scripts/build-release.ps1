@@ -2,6 +2,7 @@ param(
     [string]$GatewayBaseUrl = "",
     [string]$GatewayModel = "deepseek-v4-flash",
     [string]$GatewayToken = "",
+    [switch]$EmbedLocalModelConfig,
     [switch]$ConsoleRuntime
 )
 
@@ -145,29 +146,57 @@ if ($VersionText -notmatch '__version__\s*=\s*"([^"]+)"') {
 $Version = $Matches[1]
 Write-Host "Building 迅雷智取 Competition Release $Version"
 
+$RootEnv = Join-Path $RepoRoot ".env"
 $GatewayBaseUrl = $GatewayBaseUrl.Trim().TrimEnd([char]'/')
 $GatewayModel = $GatewayModel.Trim()
 $GatewayToken = $GatewayToken.Trim()
-$LocalSupplierKey = Read-DotEnvValue (Join-Path $RepoRoot ".env") "MODEL_API_KEY"
+$LocalModelProvider = Read-DotEnvValue $RootEnv "MODEL_PROVIDER"
+$LocalModelBaseUrl = (Read-DotEnvValue $RootEnv "MODEL_BASE_URL").Trim().TrimEnd([char]'/')
+$LocalModelName = Read-DotEnvValue $RootEnv "MODEL_NAME"
+$LocalSupplierKey = Read-DotEnvValue $RootEnv "MODEL_API_KEY"
+$LocalNodeAProfile = Read-DotEnvValue $RootEnv "NODE_A_PROFILE"
 $LocalExtensionSession = Read-DotEnvValue (Join-Path $RepoRoot "apps\extension\.env") "VITE_RUNTIME_SESSION"
+if (-not $LocalNodeAProfile) {
+    $LocalNodeAProfile = "pipeline_v3"
+}
 
-if ($GatewayBaseUrl -and $GatewayBaseUrl -notmatch '^https://') {
-    throw "GatewayBaseUrl must use HTTPS for a Competition Release."
-}
-if ($GatewayBaseUrl -match '(?i)(api\.openai\.com|dashscope\.aliyuncs\.com|api\.anthropic\.com)') {
-    throw "GatewayBaseUrl points at a model supplier endpoint. Competition Release requires a dedicated Competition Gateway."
-}
-if ($GatewayBaseUrl -and -not $GatewayModel) {
-    throw "GatewayModel is required when GatewayBaseUrl is configured."
-}
-if ($GatewayToken -and $LocalSupplierKey -and $GatewayToken -eq $LocalSupplierKey) {
-    throw "GatewayToken matches MODEL_API_KEY in local .env. Refusing to package a supplier credential."
-}
-if (-not $GatewayBaseUrl) {
-    if ($GatewayToken) {
-        throw "GatewayToken was provided without GatewayBaseUrl."
+if ($EmbedLocalModelConfig) {
+    if ($GatewayBaseUrl -or $GatewayToken) {
+        throw "EmbedLocalModelConfig cannot be combined with Competition Gateway parameters."
     }
-    Write-Warning "Competition Gateway is not configured. Packaging will complete, but AI zero-config release is not submission-ready."
+    if ($LocalModelProvider -notin @("openai", "dashscope", "openai_compatible")) {
+        throw "Root .env MODEL_PROVIDER must be openai, dashscope, or openai_compatible for -EmbedLocalModelConfig."
+    }
+    if (-not $LocalModelBaseUrl -or $LocalModelBaseUrl -notmatch '^https://') {
+        throw "Root .env MODEL_BASE_URL must be a non-empty HTTPS URL for -EmbedLocalModelConfig."
+    }
+    if (-not $LocalModelName) {
+        throw "Root .env MODEL_NAME is required for -EmbedLocalModelConfig."
+    }
+    if (-not $LocalSupplierKey) {
+        throw "Root .env MODEL_API_KEY is required for -EmbedLocalModelConfig."
+    }
+    Write-Warning "Embedding the local supplier MODEL_API_KEY into this Competition Release. Anyone who receives the artifact can extract and use this credential."
+}
+else {
+    if ($GatewayBaseUrl -and $GatewayBaseUrl -notmatch '^https://') {
+        throw "GatewayBaseUrl must use HTTPS for a Competition Release."
+    }
+    if ($GatewayBaseUrl -match '(?i)(api\.openai\.com|dashscope\.aliyuncs\.com|api\.anthropic\.com)') {
+        throw "GatewayBaseUrl points at a model supplier endpoint. Use -EmbedLocalModelConfig only when you intentionally accept embedding a supplier credential."
+    }
+    if ($GatewayBaseUrl -and -not $GatewayModel) {
+        throw "GatewayModel is required when GatewayBaseUrl is configured."
+    }
+    if ($GatewayToken -and $LocalSupplierKey -and $GatewayToken -eq $LocalSupplierKey) {
+        throw "GatewayToken matches MODEL_API_KEY in local .env. Use -EmbedLocalModelConfig only when supplier-key embedding is intentional."
+    }
+    if (-not $GatewayBaseUrl) {
+        if ($GatewayToken) {
+            throw "GatewayToken was provided without GatewayBaseUrl."
+        }
+        Write-Warning "Competition Gateway is not configured. Packaging will complete with AI disabled unless -EmbedLocalModelConfig is supplied."
+    }
 }
 
 Remove-Item $BuildRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -192,9 +221,6 @@ $frontendEnvNames = @(
 )
 $frontendEnv = Save-ProcessEnv $frontendEnvNames
 try {
-    # Existing developer .env files must not shape Competition frontend output.
-    # Whitespace is intentional: Task Center trims it to same-origin and the
-    # Extension trims it to its localhost default / no session token.
     $env:VITE_RUNTIME_URL = " "
     $env:VITE_RUNTIME_SESSION = " "
     $env:VITE_ZHIQU_CAPABILITY_MODE = "client_runtime"
@@ -251,17 +277,39 @@ if (-not (Test-Path $RuntimeExe)) {
     throw "PyInstaller output is missing XunleiZhiqu.exe"
 }
 
+$BundledExtensionDir = Join-Path $RuntimeDir "browser-extension"
+New-Item $BundledExtensionDir -ItemType Directory -Force | Out-Null
+Copy-Item (Join-Path $ExtensionDist "*") $BundledExtensionDir -Recurse -Force
+if (-not (Test-Path (Join-Path $BundledExtensionDir "manifest.json"))) {
+    throw "Bundled browser extension is missing manifest.json"
+}
+
+$AiMode = if ($EmbedLocalModelConfig) {
+    "embedded_supplier"
+}
+elseif ($GatewayBaseUrl) {
+    "gateway"
+}
+else {
+    "unavailable"
+}
+
 $ReleaseConfig = [ordered]@{
-    schema_version = 1
+    schema_version = 2
+    ai_mode = $AiMode
     competition_gateway_configured = [bool]$GatewayBaseUrl
     gateway_base_url = $GatewayBaseUrl
     gateway_model = if ($GatewayBaseUrl) { $GatewayModel } else { "" }
     gateway_token = if ($GatewayBaseUrl) { $GatewayToken } else { "" }
-    node_a_profile = "pipeline_v3"
+    model_provider = if ($EmbedLocalModelConfig) { $LocalModelProvider } else { "" }
+    model_base_url = if ($EmbedLocalModelConfig) { $LocalModelBaseUrl } else { "" }
+    model_name = if ($EmbedLocalModelConfig) { $LocalModelName } else { "" }
+    model_api_key = if ($EmbedLocalModelConfig) { $LocalSupplierKey } else { "" }
+    node_a_profile = if ($EmbedLocalModelConfig) { $LocalNodeAProfile } else { "pipeline_v3" }
 }
 $ReleaseConfigJson = $ReleaseConfig | ConvertTo-Json -Depth 4
-if ($LocalSupplierKey -and $ReleaseConfigJson.Contains($LocalSupplierKey)) {
-    throw "Supplier MODEL_API_KEY would leak into release-config.json."
+if (-not $EmbedLocalModelConfig -and $LocalSupplierKey -and $ReleaseConfigJson.Contains($LocalSupplierKey)) {
+    throw "Supplier MODEL_API_KEY would leak into release-config.json without explicit opt-in."
 }
 [IO.File]::WriteAllText(
     (Join-Path $RuntimeDir "release-config.json"),
@@ -319,7 +367,10 @@ if ($InstallerBuilt) {
 Write-Host "Portable:  $PortableZip"
 Write-Host "Extension: $ExtensionZip"
 Write-Host "Checksums: $ChecksumPath"
-Write-Host "Gateway:   $(if ($GatewayBaseUrl) { 'configured' } else { 'NOT configured' })"
+Write-Host "AI mode:   $AiMode"
+if ($EmbedLocalModelConfig) {
+    Write-Warning "This Release contains an extractable supplier API key by explicit request."
+}
 
 if (-not $InstallerBuilt) {
     exit 2
