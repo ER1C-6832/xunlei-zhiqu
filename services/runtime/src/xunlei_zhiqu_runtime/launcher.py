@@ -16,6 +16,8 @@ import webbrowser
 
 import uvicorn
 
+from xunlei_zhiqu_runtime import __version__
+
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -80,7 +82,7 @@ def _apply_release_defaults() -> None:
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         logging.getLogger(__name__).warning("release_config_invalid path=%s error=%s", path, exc)
         return
 
@@ -115,8 +117,13 @@ def _health_ready(timeout: float = 0.8) -> bool:
             if response.status != 200:
                 return False
             payload = json.loads(response.read().decode("utf-8"))
-            return payload.get("status") == "ok"
-    except (OSError, URLError, ValueError, json.JSONDecodeError):
+            return (
+                payload.get("status") == "ok"
+                and payload.get("version") == __version__
+                and isinstance(payload.get("provider"), str)
+                and bool(payload.get("provider"))
+            )
+    except (OSError, URLError, ValueError):
         return False
 
 

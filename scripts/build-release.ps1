@@ -44,14 +44,16 @@ function Find-InnoSetupCompiler {
     }
 
     $candidates = @()
-    if (${env:ProgramFiles(x86)}) {
-        $candidates += (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe")
-    }
-    if ($env:ProgramFiles) {
-        $candidates += (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
-    }
-    if ($env:LOCALAPPDATA) {
-        $candidates += (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+    foreach ($version in @("7", "6")) {
+        if (${env:ProgramFiles(x86)}) {
+            $candidates += (Join-Path ${env:ProgramFiles(x86)} "Inno Setup $version\ISCC.exe")
+        }
+        if ($env:ProgramFiles) {
+            $candidates += (Join-Path $env:ProgramFiles "Inno Setup $version\ISCC.exe")
+        }
+        if ($env:LOCALAPPDATA) {
+            $candidates += (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup $version\ISCC.exe")
+        }
     }
 
     foreach ($candidate in $candidates) {
@@ -106,12 +108,15 @@ if ($VersionText -notmatch '__version__\s*=\s*"([^"]+)"') {
 $Version = $Matches[1]
 Write-Host "Building 迅雷智取 Competition Release $Version"
 
-$GatewayBaseUrl = $GatewayBaseUrl.Trim().TrimEnd('/')
+$GatewayBaseUrl = $GatewayBaseUrl.Trim().TrimEnd([char]'/')
 $GatewayModel = $GatewayModel.Trim()
 $GatewayToken = $GatewayToken.Trim()
 
 if ($GatewayBaseUrl -match '(?i)(api\.openai\.com|dashscope\.aliyuncs\.com|api\.anthropic\.com)') {
     throw "GatewayBaseUrl points at a model supplier endpoint. Competition Release requires a dedicated Competition Gateway."
+}
+if ($GatewayBaseUrl -and -not $GatewayModel) {
+    throw "GatewayModel is required when GatewayBaseUrl is configured."
 }
 if ($GatewayToken) {
     $localSupplierKey = Read-LocalSupplierKey
