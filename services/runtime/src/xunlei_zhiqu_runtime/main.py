@@ -3,7 +3,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 import json
 import logging
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +14,7 @@ from xunlei_zhiqu_runtime.config import get_settings
 from xunlei_zhiqu_runtime.models import CaptureBatch, HealthResponse, LinkFavoriteCreateRequest, LinkFavoriteUpdateRequest, LinkHistoryItem, ManualJobCreateRequest, ResourceJobCreateRequest, ResourceJobSnapshot, ResourcePlan
 from xunlei_zhiqu_runtime.providers.base import ModelProviderRequestError, ModelProviderResponseError, ModelProviderTimeoutError
 from xunlei_zhiqu_runtime.providers.factory import create_provider
+from xunlei_zhiqu_runtime.resources import task_center_dist_path
 from xunlei_zhiqu_runtime.services import job_store as job_store_module
 from xunlei_zhiqu_runtime.services.analyzer import CaptureAnalyzer
 from xunlei_zhiqu_runtime.services.client_session import create_client_session_auth
@@ -448,8 +448,7 @@ def _analysis_stream_error(exc: Exception) -> str:
     return str(exc)
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-TASK_CENTER_DIST = PROJECT_ROOT / "apps" / "task-center" / "dist"
+TASK_CENTER_DIST = task_center_dist_path()
 if TASK_CENTER_DIST.exists():
     app.mount("/app", StaticFiles(directory=TASK_CENTER_DIST, html=True), name="task-center")
 else:
