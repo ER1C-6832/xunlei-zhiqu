@@ -41,7 +41,11 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\安装浏览器扩展"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-extension auto"
+Name: "{group}\安装 Chrome 扩展"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-extension chrome"
+Name: "{group}\安装 Edge 扩展"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-extension edge"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "启动迅雷智取"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-extension auto"; Description: "安装迅雷智取浏览器扩展（仍需在浏览器中确认一次）"; Flags: nowait postinstall skipifsilent
