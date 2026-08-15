@@ -1,166 +1,179 @@
 # 迅雷智取
 
-> 单编排器、双智能节点、确定性执行的闭环资源交付 Agent。
+**看懂资源，选对文件，托管到完成。**
 
-`main` 是当前代码事实来源。产品不扩张成通用聊天助手、通用爬虫或纯链接下载器；核心仍是 Chrome/Edge MV3 Extension、Python FastAPI Runtime 和 React 下载任务中心。
+迅雷智取是一个面向复杂下载页面的智能资源交付 Agent。它会整理页面中的版本、系统、架构、安装形式、媒体规格和附件，帮助用户选择真正需要的文件，并把下载作为长期任务托管；原来源失效时，还可以在用户当前打开的新页面中重新寻找、验证可用来源并继续原任务。
 
-## 开发进度
+核心产品由 Chrome / Edge 浏览器扩展、本地 Runtime 和下载任务中心组成。AI 负责理解资源，确定性 Runtime 负责真正执行、验证和恢复。
 
-- **Stage A~D：完成** — 页面资源采集、候选融合、Node A、ResourcePlan、用户确认与三端主链路。
-- **Stage E0：完成** — Provider/Executor 边界与 Node A 交互性能基线。
-- **Stage E：完成并真人验收** — 真实 HTTP 下载、Pause/Range Resume、SQLite 持久化、Runtime 重启后原任务原 `.part` 继续。
-- **Stage F：完成并通过受控真人端到端闭环验收** — Diagnosis、一键续取、Browser Reacquisition、真实 Node B、确定性来源验证、Source Switch、原 `.part` 跨来源续传。
-- **Stage G：进行中** — 不再增加 Agent 模块；当前进入真实互联网泛化、真实试用与产品收口。
+## 下载
 
-Stage F 的受控验收只证明 Recovery Architecture 成立，详细事实保存在 `docs/blueprint/F-acceptance.md`。Stage G 不以 localhost、fixture 或自制资源站作为 PASS 依据。
+### Windows 10 / 11 x64
 
-## 当前完整链路
+Competition Release 的目标交付物为：
 
-```text
-真实页面
-→ Extension Capture
-→ Node A
-→ ResourcePlan
-→ 用户确认
-→ ResourceJob
-→ 真实 HTTP/HTTPS 下载
-→ .part / Range Resume / SQLite
-→ 现实失败
-→ Runtime Diagnosis
-→ 一次同来源轻量重试
-→ 必要时「一键续取 / 寻找其他来源」
-→ 用户进入任意相关真实页面
-→ Extension 保持「继续下载」模式
-→ 当前 active tab Capture
-→ Node B 语义匹配
-→ Runtime Source Verification
-→ Source Switch
-→ 原 ResourceJob / 原 .part / 原 offset 继续
-→ 完成
-```
+- `XunleiZhiqu-Setup-x64.exe` — 推荐安装包；
+- `XunleiZhiqu-Portable-x64.zip` — 免安装兜底版本；
+- `XunleiZhiqu-Extension.zip` — 浏览器扩展；
+- `SHA256SUMS.txt` — Release 文件完整性校验。
 
-## Stage G 已完成的代码收口
+当前仓库已经具备 Windows Release 打包流水线，但正式二进制尚需在 Windows x64 构建机生成并完成 clean-machine 真人验收后再发布 GitHub Release。因此这里暂不放一个尚不存在的下载链接。
 
-### Recovery 不再受原网站限制
+正式 Release 发布后，普通用户只需要：
 
-原资源页只是“一键续取”的默认落点，不再是恢复范围边界。只要 pending RecoveryContext 仍存在，用户可以导航到原站其他页面、官方镜像、其他 CDN 或另一个网站；Extension 仍保持「继续下载」模式。
+1. 下载并运行 `XunleiZhiqu-Setup-x64.exe`；
+2. 安装结束后启动迅雷智取，任务中心会自动在浏览器中打开；
+3. 安装浏览器扩展；
+4. 打开一个真实下载页面，使用迅雷智取 Side Panel。
 
-Recovery 只操作用户当前 active tab：首次打开恢复页面可以自动扫描一次；之后切换/导航页面只提示用户可以在当前页面继续寻找，不遍历所有 tabs、不自动打开搜索引擎、不后台爬网页。
+**已打包的 Competition Release 不要求用户安装 Python、Node.js、pnpm、uv 或源码仓库。**
 
-Side Panel 的恢复动作收口为：
+### 浏览器扩展
 
-```text
-在当前页面寻找
-打开原资源页
-```
+浏览器商店入口尚未发布时，Competition Release 使用 Extension ZIP：
 
-### Node B 回到正式 Provider API
+1. 下载 `XunleiZhiqu-Extension.zip`；
+2. 解压到一个固定目录；
+3. Chrome 打开 `chrome://extensions`，Edge 打开 `edge://extensions`；
+4. 打开“开发者模式”；
+5. 点击“加载已解压的扩展程序”；
+6. 选择刚才解压的目录。
 
-`ModelProviderAdapter` 提供正式的结构化语义调用能力，Node B 不再读取 Provider 的 `_inner`、`_client`、`_api_adapter`、`_model` 私有字段。
+安装器只安装本地 Runtime，不会修改浏览器注册表或强制安装扩展。
 
-```text
-RecoveryService
-→ ModelProviderAdapter.generate_structured(...)
-→ StructuredChatProvider
-→ ProviderApiAdapter
-→ OpenAI-compatible / DashScope supplier dialect
-```
+## 30 秒上手
 
-Node A 与 Node B 继续复用同一个 provider/model/client 体系，没有第二套 Gateway，也没有 Node B 性能工程。
+1. 打开一个包含多个下载项的真实网页；
+2. 打开迅雷智取 Side Panel；
+3. 点击智能分析；
+4. 查看版本、平台、架构、格式等通俗说明，并确认需要的资源；
+5. 创建下载任务；
+6. 在任务中心查看真实下载进度、暂停或继续。
 
-Node B 模型输入继续排除原始 Source URL；候选文字和目标文字在 Runtime 再做一层 URL/凭证样式去敏。Node A 仍使用既有 CloudAnalysisRequest 隐私边界。
+如果原下载地址失效，可以使用“一键续取 / 寻找其他来源”。迅雷智取会在你当前打开的新页面中寻找原资源候选，并在真正切换来源前由本地 Runtime 做确定性验证。
 
-### GET `/v1/jobs` 为纯读
+## 产品能力
 
-Task Center polling 不再触发 Diagnosis、same-source retry 或 `waiting_for_source` 状态推进。
+- **智能整理复杂下载页**：把散落的版本、平台、架构、安装版/便携版、媒体规格和附件整理成可理解的选择。
+- **当前设备推荐**：给出有理由、可修改的场景化推荐，而不是替用户猜隐藏意图。
+- **批量资源理解**：支持一个页面中的多个相关资源和多 Asset 下载任务。
+- **真实本地下载**：HTTP / HTTPS 文件进入本地下载目录，不是浏览器假进度。
+- **Pause / Resume**：暂停后继续使用真实 HTTP Range。
+- **Runtime 重启恢复**：任务、`.part` 和执行状态由 SQLite 持久化，重启后继续保留。
+- **长期任务与失败诊断**：区分普通中断、来源失效、鉴权失效、内容变化和本地保存问题。
+- **跨页面一键续取**：来源失效后，可以在当前 active tab 的另一个页面、镜像或 CDN 中寻找同一资源。
+- **Node B 找回原资源**：Node B 只负责语义身份匹配。
+- **确定性来源验证**：新来源必须满足长度、Range 和已有 `.part` 字节抽样等安全条件后才允许拼接旧进度。
 
-真实下载状态由 executor 的 state sink 持久化，失败后的 Diagnosis / retry / reacquire 升级由 Runtime 内部轻量 reconcile loop 推进。没有 Event Bus、WebSocket 或新的状态系统。
-
-### 连接失败可以升级到寻找其他来源
+## AI 原生设计
 
 ```text
-第一次 connection interruption / 5xx
-→ 一次 same-source retry
+节点 A
+→ 第一次理解页面资源并帮助用户选对
 
-仍失败且没有继续取得有效进展
-→ interrupted / waiting_for_source
-→ 用户可「寻找其他来源」或「一键续取」
+节点 B
+→ 原来源变化后，在用户当前页面重新找到原资源
+
+确定性 Runtime
+→ 真正执行、诊断、验证来源、Range Resume 和 Source Switch
 ```
 
-`runtime_interrupted` 仍保持 Stage E 语义：Runtime 重启后不自动联网，由用户继续原来源。
+项目的核心原则是：**AI 负责理解，不负责证明两个来源可以安全拼接。** Node B 的语义判断不是写入许可；最终是否允许从旧 `.part` 继续，由本地 Runtime 的确定性验证决定。
 
-## 安全边界
+## 隐私边界
 
-Node B 只负责语义身份匹配，不是执行许可。跨来源复用旧 `.part` 仍必须通过 Runtime 的确定性验证：
+完整 Source URL、Cookie、Authorization、signed token、本地绝对路径、`.part` 内容和下载执行状态属于本地执行层，不应进入模型 prompt。
+
+模型处理的是经过压缩和脱敏的资源语义信息。Node A 使用既有 CloudAnalysisRequest 隐私边界；Node B 的候选与目标文本还会在 Runtime 做 URL / 凭证样式去敏。
+
+## 当前支持范围
+
+Competition Prototype 当前主要面向：
+
+- Windows 10 / 11 x64；
+- Chrome / Edge；
+- 普通 HTTP / HTTPS 文件型资源；
+- 软件安装包、压缩包、文档、图片、普通媒体和大文件等真实公网资源。
+
+当前 Runtime Executor **不执行** Magnet / Torrent / HLS / M3U8 / DASH / `blob:` 等协议，也不会为了比赛版本绕过登录、CAPTCHA、DRM、防盗链或站点安全机制。
+
+## 项目状态
+
+核心闭环已经完成：首次资源理解与选择、真实下载、Pause / Range Resume、SQLite 持久化、来源失效诊断、Node B 重新找回以及确定性 Source Switch 都已进入 `main`。
+
+**Stage G / 真实互联网试用仍在进行中。** Competition Release Packaging 与 Stage G 是否真人公网验收完成是两件事；在真实网站覆盖和 clean-machine 安装验证完成前，不宣称 Stage G PASS 或 Release Verified。
+
+架构与历史验收记录见 `docs/blueprint/`。
+
+## Competition Release 构建
+
+开发机使用 Windows 10 / 11 x64，并准备 Node/Corepack、uv；要生成安装包还需要 Inno Setup。Release 构建不会自动 commit、push 或发布 GitHub Release。
+
+在仓库根目录运行：
+
+```powershell
+.\scripts\build-release.ps1
+```
+
+脚本依次执行基础编译/类型检查、Task Center build、Extension build、PyInstaller onedir、Portable ZIP、Extension ZIP、Inno Setup 和 SHA256，最终统一输出到：
 
 ```text
-语义身份匹配
-+
-remote total 与原任务一致
-+
-新来源支持 Range
-+
-已有 .part 的 start / middle / end 小范围字节抽样一致
+artifacts/release/
+├─ XunleiZhiqu-Setup-x64.exe
+├─ XunleiZhiqu-Portable-x64.zip
+├─ XunleiZhiqu-Extension.zip
+└─ SHA256SUMS.txt
 ```
 
-若公开页面已有可靠 checksum，可以作为更强证据；当前不建设强制全文件 hash/chunk tree 架构。
+如果没有安装 Inno Setup，脚本会明确报告 Installer 未生成；Portable 和 Extension 仍会保留用于排查，但不能把这种状态称为完整 Competition Release。
 
-完整 Source URL、Cookie、Authorization、signed token、本地绝对路径和 `.part` 内容不应进入模型 prompt。
+### Competition Gateway
 
-## Stage G 真人验收
+Release **绝不打包开发者 `.env` 或供应商 root API key**。面向比赛交付的零配置 AI 路径应连接专门的 Competition AI Gateway，并使用可吊销、有限额度的客户端 token。
 
-Stage G 当前**尚未标记完成**。最终需要在真实 Chrome/Edge、真实公网 HTTP/HTTPS 和真实第三方公开资源上完成至少：
+构建时可以显式传入：
 
-- 多个不同 DOM 结构的真实软件下载/文件页面；
-- 图片与多图片真实下载；
-- 普通 HTTP 直链媒体或大文件；
-- Redirect / CDN；
-- 一次不同真实公网来源的 Source A → Source B 跨网站恢复；
-- 少量非开发者自然试用。
+```powershell
+.\scripts\build-release.ps1 `
+  -GatewayBaseUrl "https://your-competition-gateway.example/v1" `
+  -GatewayModel "deepseek-v4-flash" `
+  -GatewayToken "competition-client-token"
+```
 
-跨网站恢复必须保持同一个 ResourceJob、同一个 `.part`，Source B 用 HTTP Range 从旧百分比继续并最终完成。真实用户结果出来前不宣称 Stage G PASS。
+`GatewayToken` 必须是为 Competition Release 单独设计的客户端凭证，不能是 DashScope / OpenAI 等供应商 root key。构建脚本会拒绝已知的直接供应商 endpoint，并在发现传入 token 与本地 `.env` 的 `MODEL_API_KEY` 相同时停止打包。
 
-## 基础检查
+如果当前还没有 Competition Gateway，可以不传这些参数完成 Packaging；此时应准确描述为：**Packaging complete，AI zero-config release blocked by missing Competition Gateway**。
 
-当前阶段不使用 pytest，也不建设新的测试框架。
+## 开发
 
-```bash
+开发模式仍保持现有 `.env` 和三端工作流。前端使用仓库锁定的 pnpm 版本。
+
+安装依赖：
+
+```powershell
+corepack pnpm install
+uv sync --project services/runtime
+```
+
+基础检查：
+
+```powershell
 uv run --project services/runtime python -m compileall services/runtime/src
-
 corepack pnpm typecheck
 corepack pnpm --filter @xunlei-zhiqu/extension build
 corepack pnpm --filter @xunlei-zhiqu/task-center build
 ```
 
-关键能力最终以真实网站、真实浏览器、真实模型、真实公网下载和真人使用判断。
+开发模式启动 Runtime：
 
-## 本地启动
-
-```bash
-uv run --project services/runtime uvicorn xunlei_zhiqu_runtime.main:app \
-  --app-dir services/runtime/src \
-  --host 127.0.0.1 \
-  --port 8765
+```powershell
+uv run --project services/runtime uvicorn xunlei_zhiqu_runtime.main:app --app-dir services/runtime/src --host 127.0.0.1 --port 8765
 ```
 
-Task Center：
+开发模式启动 Task Center：
 
-```bash
+```powershell
 corepack pnpm --filter @xunlei-zhiqu/task-center dev
 ```
 
-Extension：
-
-```bash
-corepack pnpm --filter @xunlei-zhiqu/extension build
-```
-
-Runtime 默认状态库：`~/.xunlei-zhiqu/runtime.db`；下载目录和数据库都可以通过 `.env` 显式指定。
-
-## 明确不扩张
-
-Stage G 不新增聊天、搜索引擎 Agent、自动 Google/Bing、站点爬虫、VLM、BT/Magnet executor、M3U8/DASH downloader、多线程分块、账号/云盘、第二套模型系统或新的大型基础设施。
-
-Magnet、Torrent、M3U8、DASH、blob 等当前执行器不能完成的协议应明确告诉用户“当前版本暂不支持这种下载方式”，而不是创建一个无法完成的任务。
-
-Stage G 完成后不进入 Stage H，只允许真实使用后的 Bugfix、产品文案/体验打磨、录屏和比赛材料。
+Runtime 默认状态库为 `~/.xunlei-zhiqu/runtime.db`，默认下载目录为 `~/Downloads/迅雷智取`。Competition Installer 只替换程序文件，不应把这些用户任务和下载文件写进或绑死在安装目录。
