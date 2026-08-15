@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # Supplier/API dialect is independent from Node-A prompt/transport profile.
     model_provider: Literal[
         "fixture",
+        "unavailable",
         "openai",
         "dashscope",
         "openai_compatible",

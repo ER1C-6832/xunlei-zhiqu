@@ -99,15 +99,25 @@ def _apply_release_defaults() -> None:
     profile = str(payload.get("node_a_profile") or "pipeline_v3").strip()
 
     if not base_url or not model:
-        logging.getLogger(__name__).warning("competition_gateway_not_configured")
+        # Packaging without a Competition Gateway must still be installable and
+        # usable for local task/download acceptance. Fail only semantic model
+        # calls; never fall back to a supplier default or a fake fixture model.
+        os.environ["MODEL_PROVIDER"] = "unavailable"
+        os.environ["MODEL_NAME"] = "competition-gateway-unavailable"
+        os.environ.pop("MODEL_API_KEY", None)
+        logging.getLogger(__name__).warning("competition_gateway_not_configured ai_disabled=true")
         return
 
-    os.environ.setdefault("MODEL_PROVIDER", "openai_compatible")
-    os.environ.setdefault("MODEL_BASE_URL", base_url)
-    os.environ.setdefault("MODEL_NAME", model)
-    os.environ.setdefault("NODE_A_PROFILE", profile)
+    # A frozen release is governed by release-config.json, not by inherited
+    # developer/supplier environment variables on the machine that launches it.
+    os.environ["MODEL_PROVIDER"] = "openai_compatible"
+    os.environ["MODEL_BASE_URL"] = base_url
+    os.environ["MODEL_NAME"] = model
+    os.environ["NODE_A_PROFILE"] = profile
     if token:
-        os.environ.setdefault("MODEL_API_KEY", token)
+        os.environ["MODEL_API_KEY"] = token
+    else:
+        os.environ.pop("MODEL_API_KEY", None)
 
     logging.getLogger(__name__).info(
         "competition_gateway_configured model=%s profile=%s token_present=%s",

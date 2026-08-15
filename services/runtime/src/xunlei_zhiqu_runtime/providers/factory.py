@@ -7,6 +7,7 @@ from xunlei_zhiqu_runtime.providers.evidence_wire import EvidenceWireProvider
 from xunlei_zhiqu_runtime.providers.fixture import FixtureProvider
 from xunlei_zhiqu_runtime.providers.node_a_profiles import build_node_a_profile
 from xunlei_zhiqu_runtime.providers.structured_chat import StructuredChatProvider
+from xunlei_zhiqu_runtime.providers.unavailable import UnavailableModelProvider
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -19,6 +20,10 @@ def create_provider(settings: Settings) -> ModelProviderAdapter:
                 "FixtureProvider is development-only; set ENABLE_FIXTURE_PROVIDER=true explicitly"
             )
         return FixtureProvider()
+
+    if settings.model_provider == "unavailable":
+        logger.warning("model_provider_unavailable")
+        return UnavailableModelProvider()
 
     profile = build_node_a_profile(
         profile=settings.node_a_profile,
